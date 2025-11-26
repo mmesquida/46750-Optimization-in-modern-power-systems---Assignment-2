@@ -60,21 +60,33 @@ class OptimizationProblemModel1SingleHour:
         d = self.data
         K = d.tech
 
-        # Decision variables: capacity for each technology (MW)
+        # Decision variables
         x = self.m.addVars(K, lb=0.0, name="x")
 
-        # Lower bound constraints (explicit, so you can read duals if needed)
+        # Lower bounds
         self.con.x_lb = {}
         for k in K:
             self.con.x_lb[k] = self.m.addConstr(x[k] >= 0.0, name=f"x_lb[{k}]")
 
-        # Total capacity budget
+        # Max per technology: 200 MW for each
+        max_cap = 200
+        self.con.x_ub = {}
+        for k in K:
+            self.con.x_ub[k] = self.m.addConstr(x[k] <= max_cap, name=f"x_ub[{k}]")
+
+        # Nuclear minimum: 100 MW
+        nuclear_index = d.tech_names.index("nuclear")
+        self.con.nuclear_min = self.m.addConstr(
+            x[nuclear_index] >= 100, name="nuclear_min"
+        )
+
+        # Total capacity cap: 500 MW
         self.con.total_cap = self.m.addConstr(
             gp.quicksum(x[k] for k in K) <= d.X_max,
             name="total_capacity_cap"
         )
 
-        # Objective: profit in this hour
+        # Objective
         obj_expr = gp.quicksum(
             (d.lambda_price - d.c[k]) * d.alpha[k] * x[k]
             for k in K
@@ -82,8 +94,8 @@ class OptimizationProblemModel1SingleHour:
 
         self.m.setObjective(obj_expr, GRB.MAXIMIZE)
 
-        # Save variable handles
         self.vars.x = x
+
 
     def solve(self, verbose: bool = False):
         if not verbose:
@@ -103,16 +115,33 @@ class OptimizationProblemModel1SingleHour:
         return self.results
 
 if __name__ == "__main__": 
-    lambda_price = 60.0  # €/MWh
-    c = np.array([20, 25, 40, 45, 55])       # five techs
-    alpha = np.array([1, 1, 1.0, 1.0, 1.0])  # e.g. wind, coal, oil, waste, nuclear
-    X_max = 500.0  # MWh
+    lambda_price = 70.0  # €/MWh
+    c = np.array([10, 45, 100, 60, 12])       # five techs
+    alpha = np.array([0.50, 1, 1.0, 1.0, 1.0])  # e.g. wind, coal, oil, biomass, nuclear
+    X_max = 500.0  # MW
+    Capex_one_hour = -1000000000 / (25*365.25*24)# 1 billion EUR capex 
 
-    data = InputDataModel1SingleHour(lambda_price, c, alpha, X_max)
+    tech_names = ["wind", "coal", "oil", "biomass", "nuclear"]
+
+    data = InputDataModel1SingleHour(
+        lambda_price=lambda_price,
+        c=c,
+        alpha=alpha,
+        X_max=X_max,
+        C_capex_fixed=Capex_one_hour,
+        tech_names=tech_names
+    )
+
     prob = OptimizationProblemModel1SingleHour(data)
     prob.build()
     res = prob.solve()
 
-    print("Optimal capacities x:", res.x)
-    print("Objective (hourly profit):", res.obj)
+    print("\nModel 1 Results (myopic model at standard price):")
+    print("\nWind alpha coefficient:", alpha[0])
+    print("\nOptimal Wind capacity     (MW): ", res.x[0])
+    print("Optimal Coal capacity     (MW): ", res.x[1])
+    print("Optimal Oil capacity      (MW): ", res.x[2])
+    print("Optimal Biomass capacity  (MW): ", res.x[3])
+    print("Optimal Nuclear capacity  (MW): ", res.x[4])
+    print("\nObjective (hourly profit):", res.obj, "\n")
 
