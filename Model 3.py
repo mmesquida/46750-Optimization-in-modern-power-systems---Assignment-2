@@ -12,33 +12,43 @@ class Expando:
     pass
 
 
-def simulate_capex_auction(
-    base_capex_per_mw,
-    n_units=10,          # number of generator units available per technology
-    n_bidders=15,        # number of buyers (including us)
-    seed=42,
-):
-    """
-    Forward auction for generators:
-    - Seller offers n_units generators of each technology.
-    - Each generator has a cost around base_capex_per_mw.
-    - n_bidders buyers each want 1 generator.
-    - Clearing CAPEX = cost of the marginal unit that satisfies total demand.
-      More bidders -> higher demand -> higher clearing CAPEX.
-    """
+def simulate_capex_auction(base_capex_per_mw, n_units=10, n_buyers=10, seed=42):
     np.random.seed(seed)
     base_capex_per_mw = np.asarray(base_capex_per_mw, dtype=float)
     K = len(base_capex_per_mw)
     C_capex = np.zeros(K)
 
-    demand_units = max(1, n_bidders)
+    print("Number of generators up for auction:", n_units)
+    print("Number of buyers in auction:", n_buyers)
 
     for k in range(K):
-        supply_costs = base_capex_per_mw[k] * np.random.uniform(0.8, 1.2, size=n_units)
-        supply_costs = np.sort(supply_costs)
+        # seller asks
+        asks = base_capex_per_mw[k] * np.random.uniform(0.8, 1.2, size=n_units)
+        asks = np.sort(asks)  # ascending
 
-        idx = min(demand_units - 1, n_units - 1)
-        C_capex[k] = supply_costs[idx]
+        # buyer bids (willingness to pay)
+        bids = (1.5 * base_capex_per_mw[k]) * np.random.uniform(0.8, 1.2, size=n_buyers)
+        bids = np.sort(bids)[::-1]  # descending
+
+        # number of trades = min(buyers, sellers)
+        trades = min(n_units, n_buyers)
+
+        # clearing price = lowest winning bid AND highest winning ask midpoint
+        clearing_price = max(asks[trades - 1], bids[trades - 1])
+
+        C_capex[k] = clearing_price
+    
+    print("Wind - Asking price", base_capex_per_mw[0], "€/MW", 
+          "-> Clearing price:", C_capex[0], "€/MW")
+    print("Coal - Asking price", base_capex_per_mw[1], "€/MW", 
+          "-> Clearing price:", C_capex[1], "€/MW")
+    print("Oil - Asking price", base_capex_per_mw[2], "€/MW", 
+          "-> Clearing price:", C_capex[2], "€/MW")
+    print("Biomass - Asking price", base_capex_per_mw[3], "€/MW", 
+          "-> Clearing price:", C_capex[3], "€/MW")
+    print("Nuclear - Asking price", base_capex_per_mw[4], "€/MW", 
+          "-> Clearing price:", C_capex[4], "€/MW")
+    
 
     return C_capex
 
@@ -169,18 +179,14 @@ if __name__ == "__main__":
 
     C_capex = simulate_capex_auction(
         base_capex_per_mw=base_capex_per_mw,
-        n_units=10,
-        n_bidders=12 ,
+        n_units=5,
+        n_buyers=10,
         seed=42,
     )
 
-    print("Auction-derived CAPEX per MW [€/MW]:")
-    for name, cap in zip(tech_names, C_capex):
-        print(f"  {name}: {cap:.1f} €/MW")
-
     X_max = 500.0
     x_ub = np.full(n_tech, 200.0)
-    x_min_nuc = 100.0  # same nuclear min as Model 1
+    x_min_nuc = 0.0  # same nuclear min as Model 1
 
     data = InputDataModel3(
         lambdas=lambdas,
