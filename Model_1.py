@@ -75,10 +75,10 @@ class OptimizationProblemModel1SingleHour:
             self.con.x_ub[k] = self.m.addConstr(x[k] <= max_cap, name=f"x_ub[{k}]")
 
         # Nuclear minimum: 100 MW
-        nuclear_index = d.tech_names.index("nuclear")
-        self.con.nuclear_min = self.m.addConstr(
-            x[nuclear_index] >= 100, name="nuclear_min"
-        )
+        #nuclear_index = d.tech_names.index("nuclear")
+        #self.con.nuclear_min = self.m.addConstr(
+            #x[nuclear_index] >= 100, name="nuclear_min"
+        #)
 
         # Total capacity cap: 500 MW
         self.con.total_cap = self.m.addConstr(
@@ -116,7 +116,7 @@ class OptimizationProblemModel1SingleHour:
 
 if __name__ == "__main__": 
     lambda_price = 70.0  # €/MWh
-    c = np.array([10, 45, 100, 60, 12])       # five techs
+    c = np.array([5, 45, 100, 60, 15])       # five techs
     alpha = np.array([0.50, 1, 1.0, 1.0, 1.0])  # e.g. wind, coal, oil, biomass, nuclear
     X_max = 500.0  # MW
     Capex_one_hour = -1000000000 / (25*365.25*24)# 1 billion EUR capex 
@@ -144,4 +144,76 @@ if __name__ == "__main__":
     print("Optimal Biomass capacity  (MW): ", res.x[3])
     print("Optimal Nuclear capacity  (MW): ", res.x[4])
     print("\nObjective (hourly profit):", res.obj, "\n")
+
+    '''x_opt = np.array(res.x)   # each technology's MW
+
+    import matplotlib.pyplot as plt
+    # Bar plot
+    plt.figure(figsize=(8, 5))
+    plt.bar(tech_names, x_opt)
+
+    plt.xlabel("Technology")
+    plt.ylabel("Optimal Investment (MW)")
+    plt.title("Optimal Capacity Investment by Technology")
+    plt.grid(axis='y', linestyle='--', alpha=0.6)
+
+    # Optional: add data labels on top of the bars
+    for i, v in enumerate(x_opt):
+        plt.text(i, v + 2, f"{v:.1f}", ha='center')
+
+    plt.tight_layout()
+    plt.show()'''
+
+    import matplotlib.pyplot as plt
+    # Choose sweep ranges for each technology (example realistic ranges)
+    cost_ranges = {
+        "wind":    np.linspace(0, 40, 40),
+        "coal":    np.linspace(20, 100, 40),
+        "oil":     np.linspace(50, 200, 40),
+        "biomass": np.linspace(30, 120, 40),
+        "nuclear": np.linspace(5, 40, 40),
+    }
+
+    # Store results: mapping tech -> list of optimal MW
+    sweep_results = {tech: [] for tech in tech_names}
+
+    for tech in tech_names:
+
+        base_c = c.copy()  # original marginal costs
+        values = cost_ranges[tech]
+
+        sweep_results[tech] = []  # reset
+
+        for new_cost in values:
+            c_test = base_c.copy()
+            idx = tech_names.index(tech)
+            c_test[idx] = new_cost     # modify only this technology's cost
+
+            data = InputDataModel1SingleHour(
+                lambda_price=lambda_price,
+                c=c_test,
+                alpha=alpha,
+                X_max=X_max,
+                C_capex_fixed=Capex_one_hour,
+                tech_names=tech_names
+            )
+
+            prob = OptimizationProblemModel1SingleHour(data)
+            prob.build()
+            res = prob.solve()
+
+            # store the optimal MW investment for this technology
+            sweep_results[tech].append(res.x[idx])
+
+        # Plot for this technology
+        plt.figure(figsize=(7, 5))
+        plt.plot(values, sweep_results[tech], linewidth=2)
+
+        plt.xlabel(f"Marginal cost of {tech} (EUR/MWh)")
+        plt.ylabel(f"Optimal {tech} investment (MW)")
+        plt.title(f"Sensitivity of optimal {tech} capacity to marginal cost")
+        plt.grid(True, linestyle="--", alpha=0.6)
+
+        plt.tight_layout()
+        plt.show()
 
