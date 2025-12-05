@@ -12,50 +12,33 @@ class Expando:
     pass
 
 
-def simulate_capex_auction(base_capex, base_capex_per_mw, n_units=10, n_buyers=10, seed=42):
-    np.random.seed(seed)
+def simulate_capex_auction(
+    base_capex_per_mw,
+    n_buyers,
+    competition_intensity=0.10,
+    saturation_scale=10.0,
+    noise_level=0.05,
+    seed=None,
+):
+    if seed is not None:
+        np.random.seed(seed)
+
     base_capex_per_mw = np.asarray(base_capex_per_mw, dtype=float)
-    K = len(base_capex_per_mw)
-    C_capex = np.zeros(K)
 
-    print("\nBase CAPEX per MW for auction simulation:", base_capex)
-    print("Number of generators up for auction:", n_units)
-    print("Number of buyers in auction:", n_buyers)
+    # No competition: return asking price exactly
+    if n_buyers <= 1:
+        return base_capex_per_mw.copy()
 
-    for k in range(K):
-        # Seller asks (ascending)
-        asks = base_capex_per_mw[k] * np.random.uniform(0.8, 1.2, size=n_units)
-        asks = np.sort(asks)
+    # Competition factor
+    delta = n_buyers - 1
+    factor = 1 + competition_intensity * (1 - np.exp(-delta / saturation_scale))
 
-        # Buyer bids (ascending)
-        bids = base_capex_per_mw[k] * np.random.lognormal(mean=0.4, sigma=0.5, size=n_buyers)
-        bids = np.sort(bids)
+    # Small iid noise around the scaling
+    noise = 1 + noise_level * (np.random.uniform(-1, 1, size=len(base_capex_per_mw)))
 
-        # Number of trades
-        trades = min(n_units, n_buyers)
+    return base_capex_per_mw * factor * noise
 
-        # Clearing price = highest losing bid (scarcity drives this up)
-        if n_buyers > trades:
-            clearing_price = bids[-(trades + 1)]  # highest losing bid
-        else:
-            clearing_price = max(asks[trades - 1], bids[-1])
 
-        C_capex[k] = clearing_price
-
-    print("\nCAPEX Auction Results:")
-    print("Wind - Asking price", base_capex_per_mw[0], "€/MW", 
-          "-> Clearing price:", C_capex[0], "€/MW -> ratio:", C_capex[0]/base_capex_per_mw[0])
-    print("Coal - Asking price", base_capex_per_mw[1], "€/MW", 
-          "-> Clearing price:", C_capex[1], "€/MW -> ratio:", C_capex[1]/base_capex_per_mw[1])
-    print("Oil - Asking price", base_capex_per_mw[2], "€/MW", 
-          "-> Clearing price:", C_capex[2], "€/MW -> ratio:", C_capex[2]/base_capex_per_mw[2])
-    print("Biomass - Asking price", base_capex_per_mw[3], "€/MW", 
-          "-> Clearing price:", C_capex[3], "€/MW -> ratio:", C_capex[3]/base_capex_per_mw[3])
-    print("Nuclear - Asking price", base_capex_per_mw[4], "€/MW", 
-          "-> Clearing price:", C_capex[4], "€/MW -> ratio:", C_capex[4]/base_capex_per_mw[4])
-    
-
-    return C_capex
 
 
 
@@ -162,6 +145,10 @@ class OptimizationProblemModel3:
 
 
 if __name__ == "__main__":
+
+    import matplotlib.pyplot as plt
+
+    # --- Market environment ---
     lambda_price = 70.0   # €/MWh, price taker
     T = 24
     lambdas = np.full(T, lambda_price)
@@ -169,31 +156,102 @@ if __name__ == "__main__":
     tech_names = ["wind", "coal", "oil", "biomass", "nuclear"]
     n_tech = len(tech_names)
 
+    # Marginal costs and availability factors
     c_base = np.array([10.0, 45.0, 100.0, 60.0, 12.0])   # €/MWh
-    alpha = np.array([0.50, 1.0, 1.0, 1.0, 1.0])
-
+    alpha  = np.array([0.50, 1.0, 1.0, 1.0, 1.0])
     c = np.tile(c_base.reshape(n_tech, 1), (1, T))
 
-    base_capex = 260 # €/MW
-    base_capex_per_mw = np.array([0.6 * base_capex, # wind cheaper relative to its margin
-                                  0.4 * base_capex, # coal cheap
-                                  1.0 * base_capex, # oil insanely expensive -> never used
-                                  0.5 * base_capex, # biomass cheap
-                                  1 * base_capex])  # nuclear expensive relative to its margin
+    # --- Baseline CAPEX (asking price) ---
+    base_capex = 300  # €/MW
+    base_capex_per_mw = np.array([
+        0.6 * base_capex,  # wind
+        0.4 * base_capex,  # coal
+        0.8 * base_capex,  # oil
+        0.5 * base_capex,  # biomass
+        1.0 * base_capex   # nuclear
+    ])
 
+    # === CAPEX vs number of competitors (for tuning / plotting) ===
+    max_buyers = 20          # plot from 1 to max_buyers
+    all_C = np.zeros((max_buyers, n_tech))
+    seed_base = 42           # base seed for noise
+
+    for n in range(1, max_buyers + 1):
+        C_capex_n = simulate_capex_auction(
+            base_capex_per_mw=base_capex_per_mw,
+            n_buyers=n,
+            competition_intensity=4,   # tune max uplift
+            saturation_scale=5,        # tune how fast it rises
+            noise_level=0.05,          # small random deviation
+            seed=seed_base + n         # reproducible per n, each n gets different noise
+        )
+        all_C[n-1, :] = C_capex_n
+
+    # Plot CAPEX curves for each technology
+    phi = (1+np.sqrt(5))/2  # Calculate golden ratio for correct proposrtions
+    x_length = 10
+    y_length = x_length / phi
+    plt.figure(figsize=(x_length, y_length))
+    buyers_range = np.arange(1, max_buyers + 1)
+    for k, tech in enumerate(tech_names):
+        plt.plot(buyers_range, all_C[:, k], label=tech)
+
+    plt.xlabel("Number of competitors (n buyers)")
+    plt.ylabel("CAPEX per MW [€/MW]")
+    plt.title("Auction-derived CAPEX as competition increases")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.xticks(np.arange(1, max_buyers + 1, 1))
+    plt.tight_layout()
+    plt.show()
+
+    # === NEW: net margin vs competitors (break-even plot, FIGURE 2) ===
+    # 24h margins m_k per MW (same formula as in OptimizationProblemModel3.build)
+    m_k = np.zeros(n_tech)
+    for k in range(n_tech):
+        margin_24h = np.sum(lambdas - c[k, :]) * alpha[k]
+        m_k[k] = margin_24h
+
+    net_margin = m_k[None, :] - all_C  # shape (max_buyers, n_tech)
+
+    plt.figure(figsize=(x_length, y_length))
+    for k, tech in enumerate(tech_names):
+        plt.plot(buyers_range, net_margin[:, k], label=tech)
+
+        # mark first n where net margin becomes <= 0 (break-even)
+        crossing = np.where(net_margin[:, k] <= 0)[0]
+        if crossing.size > 0:
+            n_star = buyers_range[crossing[0]]
+            plt.scatter(n_star, net_margin[crossing[0], k], s=40)
+
+    plt.axhline(0.0, color="black", linestyle="--", linewidth=1)
+    plt.xlabel("Number of competitors (n buyers)")
+    plt.ylabel("Net 24h margin per MW [€/MW]")
+    plt.title("Break-even competition level for each technology")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.xticks(np.arange(1, max_buyers + 1, 1))
+    plt.tight_layout()
+    plt.show()
+
+    # --- Choose number of competing buyers for the optimisation run ---
+    n_buyers_run = 10  # pick one scenario for Model 3
 
     C_capex = simulate_capex_auction(
         base_capex_per_mw=base_capex_per_mw,
-        n_units=5,
-        n_buyers=750,
-        seed=42,
-        base_capex=base_capex,
+        n_buyers=n_buyers_run,
+        competition_intensity=4,
+        saturation_scale=5,
+        noise_level=0.05,
+        seed=42
     )
 
+    # --- Capacity limits ---
     X_max = 500.0
-    x_ub = np.full(n_tech, 200.0)
-    x_min_nuc = 0.0  # same nuclear min as Model 1
+    x_ub  = np.full(n_tech, 200.0)  # per-technology upper bound
+    x_min_nuc = 0.0   # no nuclear minimum
 
+    # --- Construct input data ---
     data = InputDataModel3(
         lambdas=lambdas,
         c=c,
@@ -202,11 +260,21 @@ if __name__ == "__main__":
         X_max=X_max,
         x_ub=x_ub,
         tech_names=tech_names,
-        x_min_nuc=0,
+        x_min_nuc=x_min_nuc,
     )
 
     print("\nWind alpha coefficient:", alpha[0])
+    print("CAPEX used in optimisation:", C_capex)
+    print("Base CAPEX:", base_capex)
+    print("Wind asking price:", base_capex_per_mw[0], "-> Auction price:", C_capex[0])
+    print("Coal asking price:", base_capex_per_mw[1], "-> Auction price:", C_capex[1])
+    print("Oil asking price:", base_capex_per_mw[2], "-> Auction price:", C_capex[2])
+    print("Biomass asking price:", base_capex_per_mw[3], "-> Auction price:", C_capex[3])
+    print("Nuclear asking price:", base_capex_per_mw[4], "-> Auction price:", C_capex[4])
 
+    # --- Solve Model 3 ---
     prob = OptimizationProblemModel3(data)
     prob.build()
     prob.solve(verbose=True)
+
+
