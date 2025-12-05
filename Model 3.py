@@ -205,7 +205,7 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.show()
 
-    # === NEW: net margin vs competitors (break-even plot, FIGURE 2) ===
+
     # 24h margins m_k per MW (same formula as in OptimizationProblemModel3.build)
     m_k = np.zeros(n_tech)
     for k in range(n_tech):
@@ -234,8 +234,8 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.show()
 
-    # --- Choose number of competing buyers for the optimisation run ---
-    n_buyers_run = 10  # pick one scenario for Model 3
+
+    n_buyers_run = 19  # one scenario for the optimisation
 
     C_capex = simulate_capex_auction(
         base_capex_per_mw=base_capex_per_mw,
