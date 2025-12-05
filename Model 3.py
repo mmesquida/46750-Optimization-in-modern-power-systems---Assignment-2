@@ -222,7 +222,7 @@ if __name__ == "__main__":
         crossing = np.where(net_margin[:, k] <= 0)[0]
         if crossing.size > 0:
             n_star = buyers_range[crossing[0]]
-            plt.scatter(n_star, net_margin[crossing[0], k], s=40)
+            plt.scatter(n_star, net_margin[crossing[0], k], s=30, color='black', zorder=5)
 
     plt.axhline(0.0, color="black", linestyle="--", linewidth=1)
     plt.xlabel("Number of competitors (n buyers)")
