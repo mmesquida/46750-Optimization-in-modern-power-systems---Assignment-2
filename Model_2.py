@@ -146,7 +146,7 @@ if __name__ == "__main__":
     D = base_load + morning_peak + evening_peak
     D = D.round(1)
 
-    # 2) Prices λ_i 
+    # 2) Prices λ_i - > change 
     lambda_i = 20 + 0.09 * (D - D.min())
     lambda_i += np.random.normal(0, 3, T)
     lambda_i = np.clip(lambda_i, 20, 130)
