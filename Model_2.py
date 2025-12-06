@@ -9,7 +9,8 @@ def solve_model2(lambdas, c, D,
                  x_ub,
                  CF_wind,
                  X_max=None,
-                 tech_names=None):
+                 tech_names=None,
+                 min_wind_capacity=None):
     """
     Model 2: capacity investment + hourly dispatch (single day)
 
@@ -28,14 +29,14 @@ def solve_model2(lambdas, c, D,
     tech_names : list of length K    names of technologies
     """
 
-    # Convert to numpy arrays
     lambdas = np.asarray(lambdas, dtype=float)
     c       = np.asarray(c, dtype=float)
     D       = np.asarray(D, dtype=float)
     C_capex_per_MW = np.asarray(C_capex_per_MW, dtype=float)
     x_ub    = np.asarray(x_ub, dtype=float)
+    CF_wind = np.asarray(CF_wind, dtype=float)
 
-    K = c.shape[0]          # number of technologies
+    K = c.shape[0]          
     T = lambdas.shape[0]    # number of hours
     if tech_names is None:
         tech_names = [f"tech_{k}" for k in range(K)]
@@ -56,12 +57,20 @@ def solve_model2(lambdas, c, D,
     # y[k,i] : generation (MWh) of tech k in hour i
     y = m.addVars(techs, hours, name="y", lb=0.0)
 
+        # If a minimum wind capacity is requested, enforce it
+    if min_wind_capacity is not None:
+        m.addConstr(
+            x[idx_wind] >= float(min_wind_capacity),
+            name="min_wind_capacity"
+        )
+
+
     # Objective: max sum_i,k (λ_i - c_{k,i}) y_{k,i} - sum_k C_capex_k * x_k
     profit_expr = gp.quicksum(
         (lambdas[i] - c[k, i]) * y[k, i]
         for k in techs
         for i in hours
-    ) - C_capex_per_MW 
+    ) - gp.quicksum(C_capex_per_MW * x[k] for k in techs) 
 
     m.setObjective(profit_expr, GRB.MAXIMIZE)
 
@@ -166,7 +175,7 @@ if __name__ == "__main__":
     tech_names = ["Wind", "Coal", "Oil", "Biomass", "Nuclear"]
 
     # 4) CAPEX per MW 
-    Capex_one_day = -1000000000 / (25 * 365.25) # EUR per MW for 1 day equivalent
+    Capex_one_day = 1000000000 / (25 * 365.25*500) # EUR per MW for 1 day 
     #C_capex_per_MW = np.array([10, 20, 25, 5, 15], dtype=float)
 
     # 5) Max allowed capacity per tech (upper bounds)
@@ -184,125 +193,138 @@ if __name__ == "__main__":
     CF_wind = np.clip(CF_wind, 0.0, 1.0)
     print("CF_wind min, max =", CF_wind.min(), CF_wind.max())
 
-    scenario_scales = [0.5, 1.0, 2.0]
-    scenario_labels = ["Half c", "Base c", "Double c"]
+    # Solve base case where installed capacity cap is at peak demand
 
-    x_solutions = []   
-    models = []     
-    
-    for scale, label in zip(scenario_scales, scenario_labels):
-        
-        c_scen = (c* scale).round(2)
+    model_base, x_opt_base, y_opt_base = solve_model2(
+        lambdas=lambda_i,
+        c=c,
+        D=D,
+        C_capex_per_MW=Capex_one_day,
+        x_ub=x_ub,
+        CF_wind=CF_wind,
+        X_max=X_max,           
+        tech_names=tech_names
+    )
+
+    idx_wind = tech_names.index("Wind")
+
+    D_max = D.max()
+
+    scenario_scales = [1.0, 1.05, 1.1, 1.15, 1.20,1.25, 1.3,1.35,1.4,1.45,1.5]  # 0%,10%,20%,50%,100% extra
+    overinvestment_pct = [(s - 1.0) * 100 for s in scenario_scales]
+
+    profits = []
+    x_solutions = []
+    y_solutions = []  
+
+    # Scenario generator: Allow different total capacity caps
+
+    for scale in scenario_scales:
+        X_max_scen = scale * D_max   # cap total permitido en este escenario
 
         print("\n==============================")
-        print(f"Solving Model 2 for scenario: {label} (scale = {scale})")
-        print("==============================")  
-        
+        print(f"Scenario: X_max = {X_max_scen:.1f} MW "
+            f"({(scale-1)*100:.0f}% extra over peak)")
+        print("==============================")
 
         model2, x_opt, y_opt = solve_model2(
             lambdas=lambda_i,
-            c=c_scen,
+            c=c,
             D=D,
             C_capex_per_MW=Capex_one_day,
             x_ub=x_ub,
             CF_wind=CF_wind,
-            X_max=X_max,
-            tech_names=tech_names
+            X_max=X_max_scen,
+            tech_names=tech_names,
+            min_wind_capacity=None
         )
 
+        profits.append(model2.ObjVal)
         x_solutions.append(x_opt)
-        models.append(model2)
-    x_solutions = np.vstack(x_solutions).T   
 
-# --- Plot grouped bar chart ---
-n_tech = len(tech_names)
-n_scen = len(scenario_scales)
-indices = np.arange(n_tech)
-width = 0.8 / n_scen  
+    x_solutions = np.vstack(x_solutions).T
+    profits = np.array(profits)
 
-fig, ax = plt.subplots(figsize=(8, 4))
+phi = (1+np.sqrt(5))/2  # Calculate golden ratio for correct proposrtions
+x_length = 10
+y_length = x_length / phi
+plt.figure(figsize=(x_length, y_length))    
+fig, ax1 = plt.subplots(figsize=(x_length, y_length))
 
-for j in range(n_scen):
-    ax.bar(
-        indices + (j - (n_scen - 1) / 2) * width,
-        x_solutions[:, j],
-        width,
-        label=scenario_labels[j],
+
+ax1.plot(overinvestment_pct, profits, marker="o", linewidth=2, label="Profit")
+
+y_min = min(profits)
+y_max = max(profits)
+rango = y_max - y_min
+ax1.set_ylim(y_min - 0.05*rango, y_max + 0.25*rango)
+
+ax1.set_xlabel("Allowed total capacity [% over peak demand]")
+ax1.set_ylabel("Profit over 24 h [€]")
+
+ax2 = ax1.twinx()
+
+n_scen = len(overinvestment_pct)
+bottom = np.zeros(n_scen)
+bar_width = 4.0  
+
+tech_colors = []  # <-- aquí vamos a guardar el color de cada tecnología
+
+for k, tech in enumerate(tech_names):
+    bars_k = ax2.bar(
+        overinvestment_pct,
+        x_solutions[k, :],
+        width=bar_width,
+        bottom=bottom,
+        alpha=0.35,
+        label=tech,
     )
+    bottom = bottom + x_solutions[k, :]
 
-ax.set_xticks(indices)
-ax.set_xticklabels(tech_names)
-ax.set_ylabel("Optimal capacity [MW]")
-ax.set_title("Model 2 – Optimal capacity by marginal cost scenario")
-ax.legend()
-ax.grid(axis="y", alpha=0.3)
+    # Guardar el color que matplotlib ha asignado a esta tecnología
+    tech_colors.append(bars_k[0].get_facecolor())
+
+ax2.set_ylabel("Installed capacity [MW]")
+
+lines, labels = ax1.get_legend_handles_labels()
+bars, bar_labels = ax2.get_legend_handles_labels()
+
+ax1.legend(
+    lines + bars,
+    labels + bar_labels,
+    loc="upper center",
+    bbox_to_anchor=(0.5, -0.20), 
+    ncols=3,
+    frameon=False
+)
+
+plt.title("Profit vs total capacity capacity and technology mix", fontsize=14)
+plt.grid(True, axis="x", alpha=0.3)
 plt.tight_layout()
 plt.show()
 
+
 # --- Stacked generation plot ---
-plt.figure(figsize=(8, 4))
-plt.stackplot(hours,
-              *[y_opt[k, :] for k in range(len(tech_names))],
-              labels=tech_names,
-              step="post")
+plt.figure(figsize=(x_length, y_length))
+
+plt.stackplot(
+    hours,
+    *[y_opt[k, :] for k in range(len(tech_names))],
+    labels=tech_names,
+    step="post",
+    colors=tech_colors,   # mismos colores que las barras
+    alpha=0.4             # más transparente / suave
+)
 
 plt.plot(hours, D, linestyle="--", linewidth=2, label="Demand")
 plt.xlabel("Hour of day")
 plt.ylabel("Generation [MWh]")
-plt.title("Hourly generation by technology (stacked) vs demand")
+plt.title("Hourly generation by technology vs demand")
 plt.legend(loc="upper left", ncols=2)
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
 
-# Coger el escenario "Base c" (el segundo, índice 1)
-idx_base = scenario_scales.index(1.0)
-x_opt_base = x_solutions[:, idx_base]
-
-# --- Optimal capacity bar plot ---
-
-plt.figure(figsize=(6, 4))
-
-x_positions = np.arange(len(tech_names))
-plt.bar(x_positions, x_opt)
-
-plt.xticks(x_positions, tech_names, rotation=20)
-plt.ylabel("Installed capacity [MW]")
-plt.title("Optimal capacity mix (Model 2)")
-plt.grid(axis="y", alpha=0.3)
-
-plt.tight_layout()
-plt.show()
-# --- lANDA PRICE PROFILE PLOT ---
-plt.figure(figsize=(8, 4))
-plt.plot(hours, lambda_i, marker='o', linestyle='-', linewidth=2, label="Price λ_i")
-plt.xlabel("Hour of day")
-plt.ylabel("Price [€/MWh]")
-plt.title("Hourly price profile λ_i")
-# --- Wind forecast vs utilisation plot ---
-
-idx_wind = tech_names.index("Wind")
-
-plt.figure(figsize=(8, 4))
-
-plt.plot(hours, CF_wind, linewidth=2, label="Wind forecast CF (availability)")
-
-if x_opt[idx_wind] > 1e-6:
-    wind_util = y_opt[idx_wind, :] / x_opt[idx_wind]
-    plt.plot(hours, wind_util, linestyle="--", linewidth=2,
-             label="Wind utilisation (y_wind / x_wind)")
-else:
-    print("No wind capacity built (x_opt[Wind] = 0), skipping utilisation curve.")
-    wind_util = None 
-
-plt.xlabel("Hour of day")
-plt.ylabel("Fraction of capacity")
-plt.ylim(0, 1.05)
-plt.title("Wind forecast vs actual utilisation")
-plt.grid(True, alpha=0.3)
-plt.legend()
-plt.tight_layout()
-plt.show()
 
 
 
