@@ -13,7 +13,7 @@ class InputDataModel1SingleHour:
 
     lambda_price : scalar marginal revenue λ (€/MWh) in this hour
     c            : 1D array length n_tech with marginal costs c_k (€/MWh)
-    alpha        : 1D array length n_tech with availability factors α_k (0..1)
+    CF        : 1D array length n_tech with availability factors α_k (0..1)
                    e.g. α_wind, α_solar < 1; others = 1
     X_max        : total capacity budget (MW)
     C_capex_fixed: fixed capex term (can be zero if only argmax matters)
@@ -22,18 +22,18 @@ class InputDataModel1SingleHour:
         self,
         lambda_price: float,
         c: np.ndarray,
-        alpha: np.ndarray,
+        CF: np.ndarray,
         X_max: float,
         C_capex_fixed: float = 0.0,
         tech_names: Optional[List[str]] = None,
     ):
         assert c.ndim == 1, "c must be 1D (length n_tech)"
-        assert alpha.ndim == 1, "alpha must be 1D (length n_tech)"
-        assert len(c) == len(alpha), "c and alpha must have same length"
+        assert CF.ndim == 1, "CF must be 1D (length n_tech)"
+        assert len(c) == len(CF), "c and CF must have same length"
 
         self.lambda_price = float(lambda_price)
         self.c = c.astype(float)
-        self.alpha = alpha.astype(float)
+        self.CF = CF.astype(float)
         self.n_tech = len(c)
         self.tech = list(range(self.n_tech))
         self.tech_names = tech_names or [f"tech{k}" for k in range(self.n_tech)]
@@ -88,7 +88,7 @@ class OptimizationProblemModel1SingleHour:
 
         # Objective
         obj_expr = gp.quicksum(
-            (d.lambda_price - d.c[k]) * d.alpha[k] * x[k]
+            (d.lambda_price - d.c[k]) * d.CF[k] * x[k]
             for k in K
         ) + d.C_capex_fixed
 
@@ -113,11 +113,141 @@ class OptimizationProblemModel1SingleHour:
         self.results.obj = self.m.ObjVal
 
         return self.results
+    
+if __name__ == "__main__": 
+    import matplotlib.pyplot as plt
+    import matplotlib as mpl
+    mpl.rcParams["font.family"] = "Arial"     # or "Arial", "Times New Roman", "Calibri"
+#mpl.rcParams["font.size"] = 12
 
+    lambda_price = 70.0  # €/MWh
+    c_base = np.array([10, 45, 100, 60, 12])       # five techs
+    CF = np.array([0.50, 1, 1.0, 1.0, 1.0])     # e.g. wind, coal, oil, biomass, nuclear
+    X_max = 500.0  # MW
+    Capex_one_hour = -1000000000 / (25 * 365.25 * 24)  # 1 billion EUR capex 
+
+    tech_names = ["wind", "coal", "oil", "biomass", "nuclear"]
+
+    # Define scenarios: scale factors on marginal costs
+    scenario_scales = [0.5, 1.0, 2.0]
+    scenario_labels = ["Half c", "Base c", "Double c"]
+
+    # Store optimal capacities for each scenario
+    x_solutions = []
+
+    for scale in scenario_scales:
+        c = c_base * scale
+
+        data = InputDataModel1SingleHour(
+            lambda_price=lambda_price,
+            c=c,
+            CF=CF,
+            X_max=X_max,
+            C_capex_fixed=Capex_one_hour,
+            tech_names=tech_names
+        )
+
+        prob = OptimizationProblemModel1SingleHour(data)
+        prob.build()
+        res = prob.solve()
+
+        x_solutions.append(res.x)
+
+        print(f"\nScenario with c scaled by {scale}:")
+        for name, x_val in zip(tech_names, res.x):
+            print(f"  Optimal {name:8s} capacity (MW): {x_val:6.1f}")
+        print(f"  Objective (hourly profit): {res.obj:.2f}\n")
+
+    # Convert to array of shape (n_tech, n_scenarios)
+    x_solutions = np.vstack(x_solutions).T  # shape (5, 3) here
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    # Original order from your model
+    tech_names = ["Wind", "Coal", "Oil", "Biomass", "Nuclear"]
+    scenario_labels = ["Halved Marginal Costs", "Normal Marginal Costs", "Doubled Marginal Costs"]
+
+    # x_solutions shape = (n_tech, n_scen) in original tech order
+    # Example: x_solutions[k, s], where k matches tech_names[k]
+
+    # Choose your stacking order
+    desired_order = ["Nuclear", "Coal", "Wind", "Biomass", "Oil"]
+
+    # Determine indices in x_solutions that match this order
+    ordered_indices = [tech_names.index(t) for t in desired_order]
+
+    # Reorder arrays
+    x_plot = x_solutions[ordered_indices, :]
+    tech_plot_names = [tech_names[i] for i in ordered_indices]
+
+    # Golden ratio aspect
+    golden_ratio = (1 + 5**0.5) / 2
+    width = 10
+    height = width / golden_ratio
+
+    colors = [
+    "#4E79A7",  # blue
+    "#F28E2B",  # orange
+    "#E15759",  # red
+    "#76B7B2",  # teal
+    "#59A14F",  # green
+]
+    
+
+   # colors = ["#222222", "#555555", "#888888", "#bbbbbb", "#dddddd"]
+
+
+
+
+
+    fig, ax = plt.subplots(figsize=(width, height))
+
+    indices = np.arange(x_plot.shape[1])   # 3 scenarios
+
+    bottom = np.zeros(x_plot.shape[1])
+
+    # Choose bar width (0.4 looks clean for stacked bars)
+    bar_width = 0.6
+
+    for k, tech in enumerate(tech_plot_names):
+        ax.bar(
+            indices,
+            x_plot[k, :],
+            bottom=bottom,
+            width=bar_width,
+            label=tech,
+            color=colors[k],
+        )
+        bottom += x_plot[k, :]
+
+    # Nice axis labels
+    ax.set_xticks(indices)
+    ax.set_xticklabels(scenario_labels, fontsize = 13)
+    ax.set_ylabel("Optimal capacity [MW]", fontsize = 13)
+    ax.set_title("Optimal technology mix by marginal cost scenario", fontsize = 17)
+    ax.tick_params(axis="both", labelsize=12)
+
+
+    # Add horizontal grid lines *behind* the bars
+    ax.set_axisbelow(True)
+    ax.yaxis.grid(True, linestyle="--", linewidth=0.6, alpha=0.5)
+    ax.set_ylim(0,550)
+
+    # Legend
+    ax.legend(title="Technology", loc="upper right", fontsize = 12)
+
+    plt.tight_layout()
+    plt.show()
+
+
+
+
+'''
 if __name__ == "__main__": 
     lambda_price = 70.0  # €/MWh
-    c = np.array([5, 45, 100, 60, 15])       # five techs
-    alpha = np.array([0.50, 1, 1.0, 1.0, 1.0])  # e.g. wind, coal, oil, biomass, nuclear
+    c = np.array([10, 45, 100, 60, 12])       # five techs
+    CF = np.array([0.50, 1, 1.0, 1.0, 1.0])  # e.g. wind, coal, oil, biomass, nuclear
     X_max = 500.0  # MW
     Capex_one_hour = -1000000000 / (25*365.25*24)# 1 billion EUR capex 
 
@@ -126,7 +256,7 @@ if __name__ == "__main__":
     data = InputDataModel1SingleHour(
         lambda_price=lambda_price,
         c=c,
-        alpha=alpha,
+        CF=CF,
         X_max=X_max,
         C_capex_fixed=Capex_one_hour,
         tech_names=tech_names
@@ -137,83 +267,10 @@ if __name__ == "__main__":
     res = prob.solve()
 
     print("\nModel 1 Results (myopic model at standard price):")
-    print("\nWind alpha coefficient:", alpha[0])
+    print("\nWind CF coefficient:", CF[0])
     print("\nOptimal Wind capacity     (MW): ", res.x[0])
     print("Optimal Coal capacity     (MW): ", res.x[1])
     print("Optimal Oil capacity      (MW): ", res.x[2])
     print("Optimal Biomass capacity  (MW): ", res.x[3])
     print("Optimal Nuclear capacity  (MW): ", res.x[4])
-    print("\nObjective (hourly profit):", res.obj, "\n")
-
-    '''x_opt = np.array(res.x)   # each technology's MW
-
-    import matplotlib.pyplot as plt
-    # Bar plot
-    plt.figure(figsize=(8, 5))
-    plt.bar(tech_names, x_opt)
-
-    plt.xlabel("Technology")
-    plt.ylabel("Optimal Investment (MW)")
-    plt.title("Optimal Capacity Investment by Technology")
-    plt.grid(axis='y', linestyle='--', alpha=0.6)
-
-    # Optional: add data labels on top of the bars
-    for i, v in enumerate(x_opt):
-        plt.text(i, v + 2, f"{v:.1f}", ha='center')
-
-    plt.tight_layout()
-    plt.show()'''
-
-    import matplotlib.pyplot as plt
-    # Choose sweep ranges for each technology (example realistic ranges)
-    cost_ranges = {
-        "wind":    np.linspace(0, 40, 40),
-        "coal":    np.linspace(20, 100, 40),
-        "oil":     np.linspace(50, 200, 40),
-        "biomass": np.linspace(30, 120, 40),
-        "nuclear": np.linspace(5, 40, 40),
-    }
-
-    # Store results: mapping tech -> list of optimal MW
-    sweep_results = {tech: [] for tech in tech_names}
-
-    for tech in tech_names:
-
-        base_c = c.copy()  # original marginal costs
-        values = cost_ranges[tech]
-
-        sweep_results[tech] = []  # reset
-
-        for new_cost in values:
-            c_test = base_c.copy()
-            idx = tech_names.index(tech)
-            c_test[idx] = new_cost     # modify only this technology's cost
-
-            data = InputDataModel1SingleHour(
-                lambda_price=lambda_price,
-                c=c_test,
-                alpha=alpha,
-                X_max=X_max,
-                C_capex_fixed=Capex_one_hour,
-                tech_names=tech_names
-            )
-
-            prob = OptimizationProblemModel1SingleHour(data)
-            prob.build()
-            res = prob.solve()
-
-            # store the optimal MW investment for this technology
-            sweep_results[tech].append(res.x[idx])
-
-        # Plot for this technology
-        plt.figure(figsize=(7, 5))
-        plt.plot(values, sweep_results[tech], linewidth=2)
-
-        plt.xlabel(f"Marginal cost of {tech} (EUR/MWh)")
-        plt.ylabel(f"Optimal {tech} investment (MW)")
-        plt.title(f"Sensitivity of optimal {tech} capacity to marginal cost")
-        plt.grid(True, linestyle="--", alpha=0.6)
-
-        plt.tight_layout()
-        plt.show()
-
+    print("\nObjective (hourly profit):", res.obj, "\n") '''

@@ -22,7 +22,7 @@ def solve_model2(lambdas, c, D,
     lambdas : array shape (T,)       prices λ_i
     c       : array shape (K,T)      marginal costs c_{k,i}
     D       : array shape (T,)       hourly demand D_i
-    C_capex_per_MW : array shape (K,)  CAPEX per MW for each technology
+    C_capex_per_MW : Fixed number    Capex per MW 
     x_ub    : array shape (K,)       max capacity per technology
     X_max   : scalar or None         optional total capacity cap
     tech_names : list of length K    names of technologies
@@ -61,7 +61,7 @@ def solve_model2(lambdas, c, D,
         (lambdas[i] - c[k, i]) * y[k, i]
         for k in techs
         for i in hours
-    ) - gp.quicksum(C_capex_per_MW[k] * x[k] for k in techs)
+    ) - C_capex_per_MW 
 
     m.setObjective(profit_expr, GRB.MAXIMIZE)
 
@@ -97,7 +97,7 @@ def solve_model2(lambdas, c, D,
             name=f"x_ub[{k}]"
         )
 
-    # 4) Optional global capacity cap
+    # 4)  Global capacity cap
     if X_max is not None:
         m.addConstr(
             gp.quicksum(x[k] for k in techs) <= X_max,
@@ -138,55 +138,106 @@ if __name__ == "__main__":
     T = 24
     K = 5
     hours = np.arange(T)
-
+    
     # 1) Demand D profile
-    base_load = 500
+    base_load = 300
     morning_peak = 150 * np.exp(-0.5 * ((hours - 8) / 3)**2)
     evening_peak = 250 * np.exp(-0.5 * ((hours - 19) / 3)**2)
-    D = base_load + morning_peak + evening_peak
-    D = D.round(1)
 
-    # 2) Prices λ_i 
-    lambda_i = 20 + 0.09 * (D - D.min())
+    D = base_load + morning_peak + evening_peak
+
+    # Escalar para que el máximo sea 500
+    factor = 500 / D.max()
+    D = (D * factor).round(1)
+
+    # 2) Prices λ_i - > change 
+    lambda_i = 60 + 0.09 * (D - D.min())
     lambda_i += np.random.normal(0, 3, T)
     lambda_i = np.clip(lambda_i, 20, 130)
     lambda_i = lambda_i.round(2)
 
     # 3) Marginal costs c_{k,i} 
-    c_base = np.array([10.0, 30.0, 60.0, 2.0, 40.0])
+    c_base = np.array([10.0, 45.0, 100.0, 60.0, 12.0])
     c = np.tile(c_base.reshape(K, 1), (1, T))
     c += np.random.normal(0, 0.5, (K, T))
     c = np.clip(c, 0, None)
     c = c.round(2)
 
-    tech_names = ["Nuclear", "Biomass", "Gas", "Wind", "Oil"]
+    tech_names = ["Wind", "Coal", "Oil", "Biomass", "Nuclear"]
 
     # 4) CAPEX per MW 
-    C_capex_per_MW = np.array([10, 20, 25, 5, 15], dtype=float)
+    Capex_one_day = -1000000000 / (25 * 365.25) # EUR per MW for 1 day equivalent
+    #C_capex_per_MW = np.array([10, 20, 25, 5, 15], dtype=float)
 
     # 5) Max allowed capacity per tech (upper bounds)
-    x_ub = np.array([500, 300, 300, 400, 350], dtype=float)
+    x_ub = np.array([200, 200, 200, 200, 200], dtype=float)
 
     # 6) Optional global cap
-    X_max = 1200.0  # for example
+    X_max = 500.0  # for example
 
     # 7) Wind forecast: capacity factor CF_wind[i] in [0,1]
     #   Slightly windier at night and early morning
-    CF_wind = 0.4 + 0.2 * np.sin(2 * np.pi * (hours - 3) / 24)
-    CF_wind = np.clip(CF_wind, 0.05, 0.8)  # avoid zero so model always has some wind
+    rng = np.random.default_rng(seed=123)
 
+    CF_wind = 0.7 + 0.37 * np.sin(2 * np.pi * (hours - 3) / 24)
+    CF_wind += rng.normal(0.0, 0.10, size=hours.shape[0])
+    CF_wind = np.clip(CF_wind, 0.0, 1.0)
+    print("CF_wind min, max =", CF_wind.min(), CF_wind.max())
 
-    model2, x_opt, y_opt = solve_model2(
-        lambdas=lambda_i,
-        c=c,
-        D=D,
-        C_capex_per_MW=C_capex_per_MW,
-        x_ub=x_ub,
-        CF_wind=CF_wind,
-        X_max=X_max,
-        tech_names=tech_names
+    scenario_scales = [0.5, 1.0, 2.0]
+    scenario_labels = ["Half c", "Base c", "Double c"]
+
+    x_solutions = []   
+    models = []     
+    
+    for scale, label in zip(scenario_scales, scenario_labels):
+        
+        c_scen = (c* scale).round(2)
+
+        print("\n==============================")
+        print(f"Solving Model 2 for scenario: {label} (scale = {scale})")
+        print("==============================")  
+        
+
+        model2, x_opt, y_opt = solve_model2(
+            lambdas=lambda_i,
+            c=c_scen,
+            D=D,
+            C_capex_per_MW=Capex_one_day,
+            x_ub=x_ub,
+            CF_wind=CF_wind,
+            X_max=X_max,
+            tech_names=tech_names
+        )
+
+        x_solutions.append(x_opt)
+        models.append(model2)
+    x_solutions = np.vstack(x_solutions).T   
+
+# --- Plot grouped bar chart ---
+n_tech = len(tech_names)
+n_scen = len(scenario_scales)
+indices = np.arange(n_tech)
+width = 0.8 / n_scen  
+
+fig, ax = plt.subplots(figsize=(8, 4))
+
+for j in range(n_scen):
+    ax.bar(
+        indices + (j - (n_scen - 1) / 2) * width,
+        x_solutions[:, j],
+        width,
+        label=scenario_labels[j],
     )
 
+ax.set_xticks(indices)
+ax.set_xticklabels(tech_names)
+ax.set_ylabel("Optimal capacity [MW]")
+ax.set_title("Model 2 – Optimal capacity by marginal cost scenario")
+ax.legend()
+ax.grid(axis="y", alpha=0.3)
+plt.tight_layout()
+plt.show()
 
 # --- Stacked generation plot ---
 plt.figure(figsize=(8, 4))
@@ -204,6 +255,10 @@ plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
 
+# Coger el escenario "Base c" (el segundo, índice 1)
+idx_base = scenario_scales.index(1.0)
+x_opt_base = x_solutions[:, idx_base]
+
 # --- Optimal capacity bar plot ---
 
 plt.figure(figsize=(6, 4))
@@ -218,7 +273,12 @@ plt.grid(axis="y", alpha=0.3)
 
 plt.tight_layout()
 plt.show()
-
+# --- lANDA PRICE PROFILE PLOT ---
+plt.figure(figsize=(8, 4))
+plt.plot(hours, lambda_i, marker='o', linestyle='-', linewidth=2, label="Price λ_i")
+plt.xlabel("Hour of day")
+plt.ylabel("Price [€/MWh]")
+plt.title("Hourly price profile λ_i")
 # --- Wind forecast vs utilisation plot ---
 
 idx_wind = tech_names.index("Wind")
