@@ -7,14 +7,14 @@ profit is computed for a single representative hour with fixed price, fixed
 marginal costs, and a fixed CAPEX. The model determines how much capacity to
 invest in for each technology under idealised, certainty-equivalent conditions.
 
-WHAT THE SCRIPT DOES:
+What the script does:
 • Defines λ (price), c_i (marginal costs), α_i (availability), and CAPEX.
 • Formulates and solves the linear optimisation:
         maximize  Σ_i α_i (λ - c_i) x_i - CAPEX
         subject to Σ_i x_i ≤ X_max  and  0 ≤ x_i ≤ x_{i,max}
 • Prints the optimal investment vector x_i.
 
-KEY PARAMETERS TO TUNE:
+Key parameters to adjust:
 • λ         electricity price
 • c_i       marginal costs per technology
 • α_i       availability (e.g., wind derating)

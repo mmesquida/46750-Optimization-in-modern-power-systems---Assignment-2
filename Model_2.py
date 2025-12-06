@@ -1,3 +1,31 @@
+"""
+Model 2 – Intertemporal Investment and Dispatch Model
+-----------------------------------------------------
+
+This script implements Model 2, where investment decisions (x_k) are made
+together with hourly dispatch (y_{k,i}) over a 24-hour horizon. Prices,
+demand, marginal costs, and wind availability vary by hour, allowing the model
+to capture temporal effects ignored in the myopic Model 1.
+
+WHAT THE SCRIPT DOES:
+• Builds hourly demand, price, marginal cost, and wind capacity-factor profiles.
+• Decides capacity investments x_k subject to per-technology and global limits.
+• Dispatches each technology hourly to meet demand: Σ_k y_{k,i} = D_i.
+• Enforces technology constraints (e.g., wind availability y ≤ x·CF).
+• Maximises total 24h profit minus CAPEX and prints optimal x_k and y_{k,i}.
+• Runs multiple capacity-scaling scenarios to show profit sensitivity.
+• Produces plots for profit, investment mix, and hourly generation.
+
+KEY PARAMETERS TO TUNE:
+• Demand and price curve definitions
+• Wind capacity factor profile CF_wind
+• CAPEX_per_MW and marginal costs c_{k,i}
+• x_ub (per-technology caps) and X_max (global cap)
+
+USAGE:
+Run the script directly to compute optimal investments and dispatch, and to
+generate the scenario and visualisation outputs for analysis.
+"""
 
 
 import gurobipy as gp
