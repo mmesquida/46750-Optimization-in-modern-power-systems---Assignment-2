@@ -295,13 +295,92 @@ if __name__ == "__main__":
         tech_names=tech_names,
     )
 
-    # Plot optimal capacities
-    plt.figure(figsize=(6, 4))
-    pos = np.arange(len(tech_names))
-    plt.bar(pos, x_opt4)
-    plt.xticks(pos, tech_names, rotation=20)
-    plt.ylabel("Installed capacity [MW]")
-    plt.title("Model 4 – Optimal capacity mix (stochastic, auction CAPEX)")
-    plt.grid(axis="y", alpha=0.3)
-    plt.tight_layout()
-    plt.show()
+S, K, T = y_opt4.shape
+
+# Total CAPEX (same for all scenarios)
+capex_total = float(np.sum(C_capex_per_MW * x_opt4))
+
+scenario_revenue = np.zeros(S)
+scenario_var_cost = np.zeros(S)
+scenario_profit = np.zeros(S)
+
+for s in range(S):
+    # revenue: sum_t λ_{s,t} * D_{s,t}
+    scenario_revenue[s] = np.sum(lambdas_scen[s, :] * D_scen[s, :])
+
+    # variable cost: sum_{k,t} c_{k,t} * y_{s,k,t}
+    for k in range(K):
+        scenario_var_cost[s] += np.sum(c[k, :] * y_opt4[s, k, :])
+
+    # profit per scenario (CAPEX subtracted once in each scenario for comparison)
+    scenario_profit[s] = scenario_revenue[s] - scenario_var_cost[s] - capex_total
+
+# --- Plot ---
+plt.figure(figsize=(8, 4))
+x = np.arange(S)
+
+plt.bar(x - 0.25, scenario_revenue, width=0.25, label="Revenue")
+plt.bar(x,         scenario_var_cost, width=0.25, label="Variable cost")
+plt.bar(x + 0.25, scenario_profit, width=0.25, label="Profit")
+
+plt.xticks(x, [f"Scen {s}" for s in range(S)])
+plt.xlabel("Scenario")
+plt.ylabel("€ over 24 h")
+plt.title("Model 4 – scenario-wise revenue, cost and profit")
+plt.legend()
+plt.grid(axis="y", alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+total_gen_scen = np.sum(y_opt4, axis=2)  # shape (S, K): total MWh per scen, tech
+
+S, K = total_gen_scen.shape
+shares = total_gen_scen / total_gen_scen.sum(axis=1, keepdims=True)  # fractions
+
+plt.figure(figsize=(8, 4))
+x = np.arange(S)
+
+bottom = np.zeros(S)
+for k in range(K):
+    plt.bar(
+        x,
+        shares[:, k],
+        bottom=bottom,
+        label=tech_names[k]
+    )
+    bottom += shares[:, k]
+
+plt.xticks(x, [f"Scen {s}" for s in range(S)])
+plt.ylabel("Share of total generation [-]")
+plt.title("Model 4 – Technology share in each scenario")
+plt.legend(loc="upper right", ncols=2)
+plt.grid(axis="y", alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+idx_wind = tech_names.index("Wind")
+hours = np.arange(T)
+
+plt.figure(figsize=(8, 4))
+
+for s in range(S):
+    if x_opt4[idx_wind] > 1e-6:
+        wind_util = y_opt4[s, idx_wind, :] / x_opt4[idx_wind]
+        plt.plot(hours, wind_util, linestyle="--",
+                 label=f"Utilisation scen {s} (p={p_s[s]:.2f})")
+
+# Plot CF of base scenario (or all)
+plt.plot(hours, CF_wind_scen[0, :], linewidth=2, label="Wind CF scen 0")
+
+plt.xlabel("Hour of day")
+plt.ylabel("Fraction of capacity")
+plt.ylim(0, 1.05)
+plt.title("Model 4 – wind utilisation vs forecast")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+
+
+
