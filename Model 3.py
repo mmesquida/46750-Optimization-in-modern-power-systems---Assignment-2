@@ -63,14 +63,20 @@ class InputDataModel3:
         assert lambdas.ndim == 1
         assert c.ndim == 2
         assert c.shape[1] == lambdas.shape[0]
-        assert c.shape[0] == len(alpha) == len(C_capex) == len(x_ub) == len(tech_names)
+
+        assert alpha.shape == c.shape, "alpha must be of shape (n_tech, T)"
+
+        n_tech = c.shape[0]
+        assert len(C_capex) == n_tech
+        assert len(x_ub) == n_tech
+        assert len(tech_names) == n_tech
 
         self.lambdas = lambdas
         self.c = c
         self.alpha = alpha
         self.C_capex = C_capex
 
-        self.n_tech = c.shape[0]
+        self.n_tech = n_tech
         self.T = lambdas.shape[0]
         self.tech = list(range(self.n_tech))
         self.tech_names = list(tech_names)
@@ -78,6 +84,7 @@ class InputDataModel3:
         self.X_max = float(X_max)
         self.x_ub = x_ub
         self.x_min_nuc = float(x_min_nuc)
+
 
 
 class OptimizationProblemModel3:
@@ -111,7 +118,7 @@ class OptimizationProblemModel3:
 
         m_k = np.zeros(d.n_tech)
         for k in K:
-            margin_24h = np.sum(d.lambdas - d.c[k, :]) * d.alpha[k]
+            margin_24h = np.sum((d.lambdas - d.c[k, :]) * d.alpha[k, :])
             m_k[k] = margin_24h
 
         obj = gp.quicksum((m_k[k] - d.C_capex[k]) * x[k] for k in K)
@@ -149,16 +156,38 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
     # --- Market environment ---
-    lambda_price = 70.0   # €/MWh, price taker
     T = 24
-    lambdas = np.full(T, lambda_price)
+    hours = np.arange(T)
+
+    # Demand curve as in Model 2
+    base_load = 500
+    morning_peak = 150 * np.exp(-0.5 * ((hours - 8) / 3)**2)
+    evening_peak = 250 * np.exp(-0.5 * ((hours - 19) / 3)**2)
+    D = base_load + morning_peak + evening_peak
+    D = D.round(1)
+
+    # Price curve λ_t as in Model 2
+    rng_prices = np.random.default_rng(2025)  #independent reproducible seed
+    lambdas = 20 + 0.09 * (D - D.min())
+    lambdas += rng_prices.normal(0, 3, T)
+    lambdas = np.clip(lambdas, 20, 130)
+    lambdas = lambdas.round(2)
+
 
     tech_names = ["wind", "coal", "oil", "biomass", "nuclear"]
     n_tech = len(tech_names)
 
     # Marginal costs and availability factors
     c_base = np.array([10.0, 45.0, 100.0, 60.0, 12.0])   # €/MWh
-    alpha  = np.array([0.50, 1.0, 1.0, 1.0, 1.0])
+
+    # Wind capacity factor as in Model 2
+    alpha_wind = 0.4 + 0.2 * np.sin(2 * np.pi * (hours - 3) / 24)
+    alpha_wind = np.clip(alpha_wind, 0.05, 0.8)
+
+    alpha_time = np.ones((n_tech, T))
+    idx_wind = tech_names.index("wind")
+    alpha_time[idx_wind, :] = alpha_wind
+
     c = np.tile(c_base.reshape(n_tech, 1), (1, T))
 
     # --- Baseline CAPEX (asking price) ---
@@ -207,10 +236,10 @@ if __name__ == "__main__":
 
 
     # 24h margins m_k per MW (same formula as in OptimizationProblemModel3.build)
-    m_k = np.zeros(n_tech)
+    m_k = np.zeros(n_tech, dtype=float)
     for k in range(n_tech):
-        margin_24h = np.sum(lambdas - c[k, :]) * alpha[k]
-        m_k[k] = margin_24h
+        margin_24h = np.sum((lambdas - c[k, :]) * alpha_time[k, :])
+        m_k[k] = float(margin_24h)
 
     net_margin = m_k[None, :] - all_C  # shape (max_buyers, n_tech)
 
@@ -243,7 +272,7 @@ if __name__ == "__main__":
         competition_intensity=4,
         saturation_scale=5,
         noise_level=0.05,
-        seed=42
+        seed=seed_base + n_buyers_run
     )
 
     # --- Capacity limits ---
@@ -255,7 +284,7 @@ if __name__ == "__main__":
     data = InputDataModel3(
         lambdas=lambdas,
         c=c,
-        alpha=alpha,
+        alpha=alpha_time,
         C_capex=C_capex,
         X_max=X_max,
         x_ub=x_ub,
@@ -263,14 +292,14 @@ if __name__ == "__main__":
         x_min_nuc=x_min_nuc,
     )
 
-    print("\nWind alpha coefficient:", alpha[0])
+
     print("CAPEX used in optimisation:", C_capex)
     print("Base CAPEX:", base_capex)
-    print("Wind asking price:", base_capex_per_mw[0], "-> Auction price:", C_capex[0])
-    print("Coal asking price:", base_capex_per_mw[1], "-> Auction price:", C_capex[1])
-    print("Oil asking price:", base_capex_per_mw[2], "-> Auction price:", C_capex[2])
-    print("Biomass asking price:", base_capex_per_mw[3], "-> Auction price:", C_capex[3])
-    print("Nuclear asking price:", base_capex_per_mw[4], "-> Auction price:", C_capex[4])
+    print("Wind asking price:", base_capex_per_mw[0], "-> Auction price:", C_capex[0], "ratio:", C_capex[0]/base_capex_per_mw[0])
+    print("Coal asking price:", base_capex_per_mw[1], "-> Auction price:", C_capex[1], "ratio:", C_capex[1]/base_capex_per_mw[1])
+    print("Oil asking price:", base_capex_per_mw[2], "-> Auction price:", C_capex[2], "ratio:", C_capex[2]/base_capex_per_mw[2])
+    print("Biomass asking price:", base_capex_per_mw[3], "-> Auction price:", C_capex[3], "ratio:", C_capex[3]/base_capex_per_mw[3])
+    print("Nuclear asking price:", base_capex_per_mw[4], "-> Auction price:", C_capex[4], "ratio:", C_capex[4]/base_capex_per_mw[4])
 
     # --- Solve Model 3 ---
     prob = OptimizationProblemModel3(data)
