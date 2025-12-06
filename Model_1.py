@@ -1,4 +1,30 @@
-# Model 1 file. Solves base case and all scenarios for Model 1. Run to see results :) 
+"""
+Model 1 - Myopic Deterministic Investment Model
+-----------------------------------------------
+
+This script implements the simplest version of the investment problem, where
+profit is computed for a single representative hour with fixed price, fixed
+marginal costs, and a fixed CAPEX. The model determines how much capacity to
+invest in for each technology under idealised, certainty-equivalent conditions.
+
+WHAT THE SCRIPT DOES:
+• Defines λ (price), c_i (marginal costs), α_i (availability), and CAPEX.
+• Formulates and solves the linear optimisation:
+        maximize  Σ_i α_i (λ - c_i) x_i - CAPEX
+        subject to Σ_i x_i ≤ X_max  and  0 ≤ x_i ≤ x_{i,max}
+• Prints the optimal investment vector x_i.
+
+KEY PARAMETERS TO TUNE:
+• λ         electricity price
+• c_i       marginal costs per technology
+• α_i       availability (e.g., wind derating)
+• X_max     total investment limit
+• x_ub      per-technology upper bounds
+
+USAGE:
+Run the script directly to obtain the optimal capacity mix under the model’s
+simple, deterministic assumptions.
+"""
 
 from typing import List, Optional
 import numpy as np
@@ -114,7 +140,6 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     import matplotlib as mpl
     mpl.rcParams["font.family"] = "Arial"     # or "Arial", "Times New Roman", "Calibri"
-#mpl.rcParams["font.size"] = 12
 
     lambda_price = 70.0  # €/MWh
     c_base = np.array([10, 45, 100, 60, 12])       # five techs
@@ -220,9 +245,7 @@ if __name__ == "__main__":
     "#76B7B2",  # teal
     "#59A14F",  # green
 ]
-    
 
-   # colors = ["#222222", "#555555", "#888888", "#bbbbbb", "#dddddd"]
 
 
 

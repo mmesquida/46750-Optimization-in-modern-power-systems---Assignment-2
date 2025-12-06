@@ -1,3 +1,5 @@
+
+
 import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
@@ -155,7 +157,8 @@ if __name__ == "__main__":
 
     D = base_load + morning_peak + evening_peak
 
-    # Escalar para que el máximo sea 500
+    
+    # Scale so that the maximum is 500
     factor = 500 / D.max()
     D = (D * factor).round(1)
 
@@ -220,7 +223,7 @@ if __name__ == "__main__":
     # Scenario generator: Allow different total capacity caps
 
     for scale in scenario_scales:
-        X_max_scen = scale * D_max   # cap total permitido en este escenario
+        X_max_scen = scale * D_max   # total cap allowed in this scenario
 
         print("\n==============================")
         print(f"Scenario: X_max = {X_max_scen:.1f} MW "
@@ -268,7 +271,7 @@ n_scen = len(overinvestment_pct)
 bottom = np.zeros(n_scen)
 bar_width = 4.0  
 
-tech_colors = []  # <-- aquí vamos a guardar el color de cada tecnología
+tech_colors = [] 
 
 for k, tech in enumerate(tech_names):
     bars_k = ax2.bar(
@@ -281,7 +284,7 @@ for k, tech in enumerate(tech_names):
     )
     bottom = bottom + x_solutions[k, :]
 
-    # Guardar el color que matplotlib ha asignado a esta tecnología
+    # Store color of this technology
     tech_colors.append(bars_k[0].get_facecolor())
 
 ax2.set_ylabel("Installed capacity [MW]")
@@ -312,8 +315,8 @@ plt.stackplot(
     *[y_opt[k, :] for k in range(len(tech_names))],
     labels=tech_names,
     step="post",
-    colors=tech_colors,   # mismos colores que las barras
-    alpha=0.4             # más transparente / suave
+    colors=tech_colors,   
+    alpha=0.4             
 )
 
 plt.plot(hours, D, linestyle="--", linewidth=2, label="Demand")
