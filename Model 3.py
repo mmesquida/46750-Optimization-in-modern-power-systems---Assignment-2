@@ -1,5 +1,36 @@
-# Model_3.py
+"""
+Model 3 — Investment Under Competition-Driven CAPEX Formation
 
+This script implements Model 3 from the assignment: a 24-hour investment 
+optimisation model where the CAPEX of each technology depends on the level 
+of competition in the generator acquisition market. A reduced-form auction 
+model generates technology-specific CAPEX curves as the number of competing 
+bidders increases. The script:
+
+1. Builds a realistic 24-hour market environment (demand, prices, wind profile)
+2. Simulates competition-adjusted CAPEX for 1…N bidders
+3. Plots CAPEX growth and break-even points for each technology
+4. Solves the optimisation for a chosen competition level using Gurobi
+
+Usage:
+------
+All outputs (plots + optimisation results) are produced automatically. No 
+arguments are required.
+
+Key parameters to experiment with:
+----------------------------------
+- base_capex_per_mw : baseline cost of each technology
+- competition_intensity (gamma) : how strongly CAPEX increases with competition
+- saturation_scale (s)      : how quickly the CAPEX curve flattens
+- noise_level               : random variation in CAPEX bids
+- max_buyers               : range of bidders for CAPEX/break-even plots
+- n_buyers_run             : number of bidders used for the final optimisation
+
+These allow exploration of how competitive pressure affects CAPEX formation,
+technology attractiveness, and the resulting optimal investment mix.
+"""
+
+from matplotlib.lines import Line2D
 import numpy as np
 import gurobipy as gp
 from gurobipy import GRB
@@ -7,17 +38,17 @@ from gurobipy import GRB
 
 gp.setParam("LogToConsole", 0)
 
-
+# Simple class to hold attributes
 class Expando:
     pass
 
-
+# Simulate CAPEX per MW as a function of number of buyers in auction
 def simulate_capex_auction(
     base_capex_per_mw,
     n_buyers,
     competition_intensity=0.10,
-    saturation_scale=10.0,
-    noise_level=0.05,
+    saturation_scale=10.0, # how fast the competition effect saturates
+    noise_level=0.05, # relative noise level
     seed=None,
 ):
     if seed is not None:
@@ -41,7 +72,7 @@ def simulate_capex_auction(
 
 
 
-
+# Input data class for Model 3
 class InputDataModel3:
     def __init__(
         self,
@@ -63,14 +94,20 @@ class InputDataModel3:
         assert lambdas.ndim == 1
         assert c.ndim == 2
         assert c.shape[1] == lambdas.shape[0]
-        assert c.shape[0] == len(alpha) == len(C_capex) == len(x_ub) == len(tech_names)
+
+        assert alpha.shape == c.shape, "alpha must be of shape (n_tech, T)"
+
+        n_tech = c.shape[0]
+        assert len(C_capex) == n_tech
+        assert len(x_ub) == n_tech
+        assert len(tech_names) == n_tech
 
         self.lambdas = lambdas
         self.c = c
         self.alpha = alpha
         self.C_capex = C_capex
 
-        self.n_tech = c.shape[0]
+        self.n_tech = n_tech
         self.T = lambdas.shape[0]
         self.tech = list(range(self.n_tech))
         self.tech_names = list(tech_names)
@@ -80,6 +117,7 @@ class InputDataModel3:
         self.x_min_nuc = float(x_min_nuc)
 
 
+# Optimization problem class for Model 3
 class OptimizationProblemModel3:
     def __init__(self, data: InputDataModel3):
         self.data = data
@@ -95,9 +133,11 @@ class OptimizationProblemModel3:
         x = self.m.addVars(K, lb=0.0, name="x")
 
         self.con.x_ub = {}
+        # Per-technology capacity upper bounds
         for k in K:
             self.con.x_ub[k] = self.m.addConstr(x[k] <= d.x_ub[k], name=f"x_ub[{k}]")
 
+        # Minimum nuclear capacity constraint
         lower_names = [name.lower() for name in d.tech_names]
         if d.x_min_nuc > 0.0 and "nuclear" in lower_names:
             nuc_idx = lower_names.index("nuclear")
@@ -105,13 +145,14 @@ class OptimizationProblemModel3:
                 x[nuc_idx] >= d.x_min_nuc, name="x_nuclear_min"
             )
 
+        # Total capacity upper bound
         self.con.total_cap = self.m.addConstr(
             gp.quicksum(x[k] for k in K) <= d.X_max, name="total_capacity_cap"
         )
-
+        # Objective: max sum_k (m_k - C_capex_k) * x_k
         m_k = np.zeros(d.n_tech)
         for k in K:
-            margin_24h = np.sum(d.lambdas - d.c[k, :]) * d.alpha[k]
+            margin_24h = np.sum((d.lambdas - d.c[k, :]) * d.alpha[k, :])
             m_k[k] = margin_24h
 
         obj = gp.quicksum((m_k[k] - d.C_capex[k]) * x[k] for k in K)
@@ -149,16 +190,42 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
     # --- Market environment ---
-    lambda_price = 70.0   # €/MWh, price taker
     T = 24
-    lambdas = np.full(T, lambda_price)
+    hours = np.arange(T)
+
+    # Demand curve as in Model 2
+    base_load = 300
+    morning_peak = 150 * np.exp(-0.5 * ((hours - 8) / 3)**2)
+    evening_peak = 250 * np.exp(-0.5 * ((hours - 19) / 3)**2)
+    D = base_load + morning_peak + evening_peak
+    factor = 500 / D.max()
+    D = (D * factor).round(1)
+
+    # Price curve λ_t as in Model 2
+    rng_prices = np.random.default_rng(2025)  #independent reproducible seed
+    lambdas = 60 + 0.09 * (D - D.min())
+    lambdas += rng_prices.normal(0, 3, T)
+    lambdas = np.clip(lambdas, 20, 130)
+    lambdas = lambdas.round(2)
+
 
     tech_names = ["wind", "coal", "oil", "biomass", "nuclear"]
     n_tech = len(tech_names)
 
     # Marginal costs and availability factors
     c_base = np.array([10.0, 45.0, 100.0, 60.0, 12.0])   # €/MWh
-    alpha  = np.array([0.50, 1.0, 1.0, 1.0, 1.0])
+
+    # Wind capacity factor as in updated Model 2
+    rng_cf = np.random.default_rng(seed=123)
+    CF_wind = 0.7 + 0.37 * np.sin(2 * np.pi * (hours - 3) / 24)
+    CF_wind += rng_cf.normal(0.0, 0.10, size=hours.shape[0])
+    CF_wind = np.clip(CF_wind, 0.0, 1.0)
+
+    alpha_time = np.ones((n_tech, T))
+    idx_wind = tech_names.index("wind")
+    alpha_time[idx_wind, :] = CF_wind
+
+
     c = np.tile(c_base.reshape(n_tech, 1), (1, T))
 
     # --- Baseline CAPEX (asking price) ---
@@ -171,7 +238,7 @@ if __name__ == "__main__":
         1.0 * base_capex   # nuclear
     ])
 
-    # === CAPEX vs number of competitors (for tuning / plotting) ===
+    # --- CAPEX vs number of competitors (for tuning / plotting) ---
     max_buyers = 20          # plot from 1 to max_buyers
     all_C = np.zeros((max_buyers, n_tech))
     seed_base = 42           # base seed for noise
@@ -205,45 +272,82 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.show()
 
-
+    # --- Break-even analysis ---
     # 24h margins m_k per MW (same formula as in OptimizationProblemModel3.build)
-    m_k = np.zeros(n_tech)
+    m_k = np.zeros(n_tech, dtype=float)
     for k in range(n_tech):
-        margin_24h = np.sum(lambdas - c[k, :]) * alpha[k]
-        m_k[k] = margin_24h
+        margin_24h = np.sum((lambdas - c[k, :]) * alpha_time[k, :])
+        m_k[k] = float(margin_24h)
 
     net_margin = m_k[None, :] - all_C  # shape (max_buyers, n_tech)
 
     plt.figure(figsize=(x_length, y_length))
+    buyers_range = np.arange(1, max_buyers + 1)
+    # Plot net margin curves and break-even points
     for k, tech in enumerate(tech_names):
-        plt.plot(buyers_range, net_margin[:, k], label=tech)
+        y = net_margin[:, k]
+        plt.plot(buyers_range, y, label=tech)
 
-        # mark first n where net margin becomes <= 0 (break-even)
-        crossing = np.where(net_margin[:, k] <= 0)[0]
-        if crossing.size > 0:
-            n_star = buyers_range[crossing[0]]
-            plt.scatter(n_star, net_margin[crossing[0], k], s=30, color='black', zorder=5)
+        # --- break-even point via sign change & interpolation ---
+        signs = np.sign(y)
+
+        # Case 1: exactly zero at some integer n
+        idx_zero = np.where(y == 0.0)[0]
+
+        if idx_zero.size > 0:
+            i0 = idx_zero[0]
+            n_star = buyers_range[i0]
+            plt.scatter(n_star, 0.0, s=30, color="black", zorder=5)
+
+        else:
+            # Case 2: sign change between two consecutive points
+            sign_change_idx = np.where(signs[:-1] * signs[1:] < 0)[0]
+
+            if sign_change_idx.size > 0:
+                i0 = sign_change_idx[0]        # first segment where sign changes
+                x0, x1 = buyers_range[i0], buyers_range[i0 + 1]
+                y0, y1 = y[i0], y[i0 + 1]
+
+                # linear interpolation: solve y(x) = 0 between (x0,y0) and (x1,y1)
+                n_star = x0 - y0 * (x1 - x0) / (y1 - y0)
+
+                # plot the point exactly on the zero line
+                plt.scatter(n_star, 0.0, s=30, color="black", zorder=5)
+        # If no zero and no sign change: no break-even dot for this tech
 
     plt.axhline(0.0, color="black", linestyle="--", linewidth=1)
     plt.xlabel("Number of competitors (n buyers)")
     plt.ylabel("Net 24h margin per MW [€/MW]")
     plt.title("Break-even competition level for each technology")
     plt.grid(True, alpha=0.3)
-    plt.legend()
     plt.xticks(np.arange(1, max_buyers + 1, 1))
+
+    # --- custom legend entry for break-even marker ---
+    handles, labels = plt.gca().get_legend_handles_labels()
+    break_even_handle = Line2D(
+        [], [],
+        linestyle="--",   # dashed line in legend
+        marker="o",
+        color="black",
+        label="Break-even point",
+    )
+    handles.append(break_even_handle)
+    labels.append("Break-even point")
+
+    plt.legend(handles, labels)
     plt.tight_layout()
     plt.show()
 
 
+    # --- Select competition level for optimisation output---
     n_buyers_run = 19  # one scenario for the optimisation
-
     C_capex = simulate_capex_auction(
         base_capex_per_mw=base_capex_per_mw,
         n_buyers=n_buyers_run,
         competition_intensity=4,
         saturation_scale=5,
         noise_level=0.05,
-        seed=42
+        seed=seed_base + n_buyers_run
     )
 
     # --- Capacity limits ---
@@ -255,7 +359,7 @@ if __name__ == "__main__":
     data = InputDataModel3(
         lambdas=lambdas,
         c=c,
-        alpha=alpha,
+        alpha=alpha_time,
         C_capex=C_capex,
         X_max=X_max,
         x_ub=x_ub,
@@ -263,14 +367,14 @@ if __name__ == "__main__":
         x_min_nuc=x_min_nuc,
     )
 
-    print("\nWind alpha coefficient:", alpha[0])
+
     print("CAPEX used in optimisation:", C_capex)
     print("Base CAPEX:", base_capex)
-    print("Wind asking price:", base_capex_per_mw[0], "-> Auction price:", C_capex[0])
-    print("Coal asking price:", base_capex_per_mw[1], "-> Auction price:", C_capex[1])
-    print("Oil asking price:", base_capex_per_mw[2], "-> Auction price:", C_capex[2])
-    print("Biomass asking price:", base_capex_per_mw[3], "-> Auction price:", C_capex[3])
-    print("Nuclear asking price:", base_capex_per_mw[4], "-> Auction price:", C_capex[4])
+    print("Wind asking price:", base_capex_per_mw[0], "-> Auction price:", C_capex[0], "ratio:", C_capex[0]/base_capex_per_mw[0])
+    print("Coal asking price:", base_capex_per_mw[1], "-> Auction price:", C_capex[1], "ratio:", C_capex[1]/base_capex_per_mw[1])
+    print("Oil asking price:", base_capex_per_mw[2], "-> Auction price:", C_capex[2], "ratio:", C_capex[2]/base_capex_per_mw[2])
+    print("Biomass asking price:", base_capex_per_mw[3], "-> Auction price:", C_capex[3], "ratio:", C_capex[3]/base_capex_per_mw[3])
+    print("Nuclear asking price:", base_capex_per_mw[4], "-> Auction price:", C_capex[4], "ratio:", C_capex[4]/base_capex_per_mw[4])
 
     # --- Solve Model 3 ---
     prob = OptimizationProblemModel3(data)
