@@ -1,3 +1,52 @@
+"""
+Model 2 — Joint Investment and Dispatch with Capacity Cap Sensitivity
+
+This script implements Model 2 from the assignment: a 24-hour investment
+and dispatch optimisation model where the planner chooses the installed
+capacity of each technology and its hourly generation profile. A linear
+capacity expansion model is combined with a realistic 24-hour market
+environment (demand, prices, and wind availability), and the impact of
+allowing progressively more overinvestment is analysed via a series of
+capacity-cap scenarios.
+
+The script:
+1. Builds a synthetic 24-hour market environment.
+2. Solves the base-case optimisation with a system-wide capacity cap
+   equal to the peak demand (X_max = 500 MW).
+3. Generates a range of scenarios where the total capacity cap X_max is
+   increased from 0% up to 50% above the peak demand.
+4. For each scenario, solves the investment–dispatch problem using Gurobi,
+   storing optimal capacities, generation and profit.
+5. Produces:
+   - a plot of profit vs. allowed total capacity with a stacked bar
+     decomposition of the installed capacity by technology,
+   - a stacked area plot of hourly generation by technology compared
+     against demand.
+
+Usage:
+------
+All outputs are produced automatically by running the script; no command-line arguments are required.
+
+Key parameters to experiment with:
+----------------------------------
+- Capex_one_day     : dailyised CAPEX per MW of installed capacity,
+                      which controls how attractive overinvestment is.
+- x_ub              : technology-specific capacity upper bounds
+                      (default 200 MW per technology).
+- X_max             : base-case system-wide capacity cap (500 MW before
+                      scaling by scenario_scales).
+- scenario_scales   : list of multipliers applied to the peak demand to
+                      define X_max in each scenario (e.g. 1.0 to 1.5).
+- c_base and noise  : baseline marginal costs and their random perturbation.
+- CF_wind profile   : shape and randomness of the wind capacity factor,
+                      which affect the value of investing in wind capacity.
+
+These parameters allow exploration of how the allowed total capacity,
+technology cost structure and wind availability shape the optimal
+capacity mix, the hourly dispatch pattern, and the resulting profit.
+"""
+
+
 import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
@@ -11,24 +60,7 @@ def solve_model2(lambdas, c, D,
                  X_max=None,
                  tech_names=None,
                  min_wind_capacity=None):
-    """
-    Model 2: capacity investment + hourly dispatch (single day)
-
-    - Decide capacities x[k] [MW] for each technology k
-    - Decide hourly generation y[k,i] [MWh]
-    - Objective: max profit over 24h minus CAPEX (per MW * capacity)
-
-    Inputs
-    ------
-    lambdas : array shape (T,)       prices λ_i
-    c       : array shape (K,T)      marginal costs c_{k,i}
-    D       : array shape (T,)       hourly demand D_i
-    C_capex_per_MW : Fixed number    Capex per MW 
-    x_ub    : array shape (K,)       max capacity per technology
-    X_max   : scalar or None         optional total capacity cap
-    tech_names : list of length K    names of technologies
-    """
-
+    
     lambdas = np.asarray(lambdas, dtype=float)
     c       = np.asarray(c, dtype=float)
     D       = np.asarray(D, dtype=float)
@@ -37,17 +69,15 @@ def solve_model2(lambdas, c, D,
     CF_wind = np.asarray(CF_wind, dtype=float)
 
     K = c.shape[0]          
-    T = lambdas.shape[0]    # number of hours
+    T = lambdas.shape[0]    
     if tech_names is None:
         tech_names = [f"tech_{k}" for k in range(K)]
-
-    # Create model
     m = gp.Model("Model2_invest_dispatch")
 
     hours = range(T)   # i
     techs = range(K)   # k
 
-    # Indices for wind
+    
     idx_wind = tech_names.index("Wind")
 
     # Decision variables
@@ -57,12 +87,6 @@ def solve_model2(lambdas, c, D,
     # y[k,i] : generation (MWh) of tech k in hour i
     y = m.addVars(techs, hours, name="y", lb=0.0)
 
-        # If a minimum wind capacity is requested, enforce it
-    if min_wind_capacity is not None:
-        m.addConstr(
-            x[idx_wind] >= float(min_wind_capacity),
-            name="min_wind_capacity"
-        )
 
 
     # Objective: max sum_i,k (λ_i - c_{k,i}) y_{k,i} - sum_k C_capex_k * x_k
@@ -74,7 +98,7 @@ def solve_model2(lambdas, c, D,
 
     m.setObjective(profit_expr, GRB.MAXIMIZE)
 
-    # 1) Hourly demand balance: sum_k y_{k,i} == D_i
+    # 1) Hourly demand balance
     for i in hours:
         m.addConstr(
             gp.quicksum(y[k, i] for k in techs) == D[i],
@@ -82,17 +106,17 @@ def solve_model2(lambdas, c, D,
         )
 
 
-    # (2a) Capacity constraint for dispatchable techs: y[k,i] <= x[k]
+    # Capacity constraint for dispatchable techs
     for k in techs:
         if k == idx_wind:
-            continue   # handle wind separately
+            continue   
         for i in hours:
             m.addConstr(
                 y[k, i] <= x[k],
                 name=f"cap_use[{k},{i}]"
             )
 
-    # (2b) Wind availability: y[wind,i] <= x[wind] * CF_wind[i]
+    # Wind availability:
     for i in hours:
         m.addConstr(
             y[idx_wind, i] <= x[idx_wind] * CF_wind[i],
@@ -115,8 +139,6 @@ def solve_model2(lambdas, c, D,
 
     # Optimize
     m.optimize()
-
-    # Extract solution
     x_sol = np.zeros(K)
     y_sol = np.zeros((K, T))
 
@@ -154,18 +176,16 @@ if __name__ == "__main__":
     evening_peak = 250 * np.exp(-0.5 * ((hours - 19) / 3)**2)
 
     D = base_load + morning_peak + evening_peak
-
-    # Escalar para que el máximo sea 500
     factor = 500 / D.max()
     D = (D * factor).round(1)
 
-    # 2) Prices λ_i - > change 
+    # 2) Prices λ_i
     lambda_i = 60 + 0.09 * (D - D.min())
     lambda_i += np.random.normal(0, 3, T)
     lambda_i = np.clip(lambda_i, 20, 130)
     lambda_i = lambda_i.round(2)
 
-    # 3) Marginal costs c_{k,i} 
+    # 3) Marginal costs 
     c_base = np.array([10.0, 45.0, 100.0, 60.0, 12.0])
     c = np.tile(c_base.reshape(K, 1), (1, T))
     c += np.random.normal(0, 0.5, (K, T))
@@ -176,24 +196,20 @@ if __name__ == "__main__":
 
     # 4) CAPEX per MW 
     Capex_one_day = 1000000000 / (25 * 365.25*500) # EUR per MW for 1 day 
-    #C_capex_per_MW = np.array([10, 20, 25, 5, 15], dtype=float)
 
     # 5) Max allowed capacity per tech (upper bounds)
     x_ub = np.array([200, 200, 200, 200, 200], dtype=float)
 
     # 6) Optional global cap
-    X_max = 500.0  # for example
+    X_max = 500.0  
 
-    # 7) Wind forecast: capacity factor CF_wind[i] in [0,1]
-    #   Slightly windier at night and early morning
+    # 7) Wind forecast
     rng = np.random.default_rng(seed=123)
 
     CF_wind = 0.7 + 0.37 * np.sin(2 * np.pi * (hours - 3) / 24)
     CF_wind += rng.normal(0.0, 0.10, size=hours.shape[0])
     CF_wind = np.clip(CF_wind, 0.0, 1.0)
     print("CF_wind min, max =", CF_wind.min(), CF_wind.max())
-
-    # Solve base case where installed capacity cap is at peak demand
 
     model_base, x_opt_base, y_opt_base = solve_model2(
         lambdas=lambda_i,
@@ -210,7 +226,7 @@ if __name__ == "__main__":
 
     D_max = D.max()
 
-    scenario_scales = [1.0, 1.05, 1.1, 1.15, 1.20,1.25, 1.3,1.35,1.4,1.45,1.5]  # 0%,10%,20%,50%,100% extra
+    scenario_scales = [1.0, 1.05, 1.1, 1.15, 1.20,1.25, 1.3,1.35,1.4,1.45,1.5]  
     overinvestment_pct = [(s - 1.0) * 100 for s in scenario_scales]
 
     profits = []
@@ -220,7 +236,7 @@ if __name__ == "__main__":
     # Scenario generator: Allow different total capacity caps
 
     for scale in scenario_scales:
-        X_max_scen = scale * D_max   # cap total permitido en este escenario
+        X_max_scen = scale * D_max   
 
         print("\n==============================")
         print(f"Scenario: X_max = {X_max_scen:.1f} MW "
@@ -245,7 +261,7 @@ if __name__ == "__main__":
     x_solutions = np.vstack(x_solutions).T
     profits = np.array(profits)
 
-phi = (1+np.sqrt(5))/2  # Calculate golden ratio for correct proposrtions
+phi = (1+np.sqrt(5))/2  
 x_length = 10
 y_length = x_length / phi
 plt.figure(figsize=(x_length, y_length))    
@@ -268,7 +284,7 @@ n_scen = len(overinvestment_pct)
 bottom = np.zeros(n_scen)
 bar_width = 4.0  
 
-tech_colors = []  # <-- aquí vamos a guardar el color de cada tecnología
+tech_colors = [] 
 
 for k, tech in enumerate(tech_names):
     bars_k = ax2.bar(
@@ -280,8 +296,6 @@ for k, tech in enumerate(tech_names):
         label=tech,
     )
     bottom = bottom + x_solutions[k, :]
-
-    # Guardar el color que matplotlib ha asignado a esta tecnología
     tech_colors.append(bars_k[0].get_facecolor())
 
 ax2.set_ylabel("Installed capacity [MW]")
@@ -312,8 +326,8 @@ plt.stackplot(
     *[y_opt[k, :] for k in range(len(tech_names))],
     labels=tech_names,
     step="post",
-    colors=tech_colors,   # mismos colores que las barras
-    alpha=0.4             # más transparente / suave
+    colors=tech_colors,   
+    alpha=0.4            
 )
 
 plt.plot(hours, D, linestyle="--", linewidth=2, label="Demand")
