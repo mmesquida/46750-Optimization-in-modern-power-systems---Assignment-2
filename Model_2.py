@@ -51,7 +51,9 @@ import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
 import matplotlib.pyplot as plt
-
+from matplotlib.animation import FuncAnimation, PillowWriter
+from matplotlib import cm
+import os
 
 def solve_model2(lambdas, c, D,
                  C_capex_per_MW,
@@ -257,34 +259,47 @@ if __name__ == "__main__":
 
         profits.append(model2.ObjVal)
         x_solutions.append(x_opt)
+        y_solutions.append(y_opt)
 
     x_solutions = np.vstack(x_solutions).T
     profits = np.array(profits)
 
-phi = (1+np.sqrt(5))/2  
+# ============================================
+# PLOTS: estáticos + dinámicos
+# ============================================
+
+phi = (1 + np.sqrt(5)) / 2
 x_length = 10
 y_length = x_length / phi
-plt.figure(figsize=(x_length, y_length))    
-fig, ax1 = plt.subplots(figsize=(x_length, y_length))
 
-
-ax1.plot(overinvestment_pct, profits, marker="o", linewidth=2, label="Profit")
-
-y_min = min(profits)
-y_max = max(profits)
-rango = y_max - y_min
-ax1.set_ylim(y_min - 0.05*rango, y_max + 0.25*rango)
-
-ax1.set_xlabel("Allowed total capacity [% over peak demand]")
-ax1.set_ylabel("Profit over 24 h [€]")
-
-ax2 = ax1.twinx()
+plt.close('all')
 
 n_scen = len(overinvestment_pct)
-bottom = np.zeros(n_scen)
-bar_width = 4.0  
+K = len(tech_names)
 
-tech_colors = [] 
+# -------------------------------------------------
+# (1) PLOT ESTÁTICO: Profit + capacity mix
+# -------------------------------------------------
+
+fig, ax1 = plt.subplots(figsize=(x_length, y_length))
+ax2 = ax1.twinx()
+
+# Línea de beneficio
+ax1.plot(overinvestment_pct, profits, marker="o", linewidth=2, label="Profit")
+
+y_min = profits.min()
+y_max = profits.max()
+rango = y_max - y_min if y_max > y_min else 1.0
+
+ax1.set_ylim(y_min - 0.05 * rango, y_max + 0.25 * rango)
+ax1.set_xlabel("Allowed total capacity [% over peak demand]")
+ax1.set_ylabel("Profit over 24 h [€]")
+ax1.grid(True, axis="x", alpha=0.3)
+
+# Barras apiladas de capacidad por escenario
+bottom = np.zeros(n_scen)
+bar_width = 4.0
+tech_colors = []
 
 for k, tech in enumerate(tech_names):
     bars_k = ax2.bar(
@@ -307,38 +322,208 @@ ax1.legend(
     lines + bars,
     labels + bar_labels,
     loc="upper center",
-    bbox_to_anchor=(0.5, -0.20), 
+    bbox_to_anchor=(0.5, -0.20),
     ncols=3,
-    frameon=False
+    frameon=False,
 )
 
-plt.title("Profit vs total capacity capacity and technology mix", fontsize=14)
-plt.grid(True, axis="x", alpha=0.3)
+plt.title("Profit vs total allowed capacity and technology mix", fontsize=14)
 plt.tight_layout()
 plt.show()
 
 
-# --- Stacked generation plot ---
-plt.figure(figsize=(x_length, y_length))
+# -------------------------------------------------
+# (2) PLOT ESTÁTICO: generación vs demanda (último escenario)
+# -------------------------------------------------
 
-plt.stackplot(
-    hours,
-    *[y_opt[k, :] for k in range(len(tech_names))],
-    labels=tech_names,
-    step="post",
-    colors=tech_colors,   
-    alpha=0.4            
+if len(y_solutions) == 0:
+    print("WARNING: no scenarios stored in y_solutions; skipping generation plots.")
+else:
+    plt.close('all')
+
+    y_last = y_solutions[-1]  # (K, T)
+
+    fig2, axg = plt.subplots(figsize=(x_length, y_length))
+
+    axg.stackplot(
+        hours,
+        *[y_last[k, :] for k in range(K)],
+        labels=tech_names,
+        step="post",
+        colors=tech_colors,
+        alpha=0.6,
+    )
+
+    axg.plot(hours, D, linestyle="--", linewidth=2, label="Demand")
+
+    axg.set_xlabel("Hour of day")
+    axg.set_ylabel("Generation [MWh]")
+    axg.set_title("Hourly generation by technology vs demand (last scenario)")
+    axg.grid(True, alpha=0.3)
+    axg.legend(loc="upper left", ncols=2, fontsize=8)
+
+    plt.tight_layout()
+    plt.show()
+
+
+# -------------------------------------------------
+# (3) ANIMACIÓN 1: Profit + capacity mix evolucionando
+# -------------------------------------------------
+
+plt.close('all')
+
+fig_anim1, axp = plt.subplots(figsize=(x_length, y_length))
+axc = axp.twinx()
+
+def init_anim1():
+    axp.set_xlim(min(overinvestment_pct) - 2, max(overinvestment_pct) + 2)
+    axp.set_ylim(y_min - 0.05 * rango, y_max + 0.25 * rango)
+    axp.set_xlabel("Allowed total capacity [% over peak demand]")
+    axp.set_ylabel("Profit over 24 h [€]")
+    axp.set_title("Profit and capacity mix as overinvestment increases")
+    axp.grid(True, axis="x", alpha=0.3)
+
+    axc.set_xlim(min(overinvestment_pct) - 2, max(overinvestment_pct) + 2)
+    axc.set_ylim(0, 700)
+    axc.set_ylabel("Installed capacity [MW]")
+
+    return []
+
+def update_anim1(frame):
+    axp.cla()
+    axc.cla()
+    axp.yaxis.set_label_position("right")
+    axp.yaxis.tick_right()
+    axc.yaxis.set_label_position("left")
+    axc.yaxis.tick_left()
+
+    # Profit hasta el escenario 'frame'
+    axp.plot(
+        overinvestment_pct[:frame + 1],
+        profits[:frame + 1],
+        marker="o",
+        linewidth=2,
+        label="Profit",
+    )
+
+    axp.set_xlim(min(overinvestment_pct) - 2, max(overinvestment_pct) + 2)
+    axp.set_ylim(y_min - 0.05 * rango, y_max + 0.25 * rango)
+    axp.set_xlabel("Allowed total capacity [% over peak demand]")
+    axp.set_ylabel("Profit over 24 h [€]")
+    axp.set_title("Profit and capacity mix as overinvestment increases")
+    axp.grid(True, axis="x", alpha=0.3)
+
+    # Barras apiladas 0..frame
+    bottom_local = np.zeros(frame + 1)
+    bar_width = 4.0
+
+    for k, tech in enumerate(tech_names):
+        axc.bar(
+            overinvestment_pct[:frame + 1],
+            x_solutions[k, :frame + 1],
+            width=bar_width,
+            bottom=bottom_local,
+            alpha=0.35,
+            label=tech if frame == n_scen - 1 else None,
+        )
+        bottom_local = bottom_local + x_solutions[k, :frame + 1]
+
+    axc.set_xlim(min(overinvestment_pct) - 2, max(overinvestment_pct) + 2)
+    axc.set_ylim(0, 700)
+    axc.set_ylabel("Installed capacity [MW]")
+
+    if frame == n_scen - 1:
+        lines_p, labels_p = axp.get_legend_handles_labels()
+        bars_c, labels_c = axc.get_legend_handles_labels()
+        axp.legend(
+            lines_p + bars_c,
+            labels_p + labels_c,
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.20),
+            ncols=3,
+            frameon=False,
+        )
+
+    return []
+
+anim1 = FuncAnimation(
+    fig_anim1,
+    update_anim1,
+    frames=n_scen,
+    init_func=init_anim1,
+    interval=1000,
+    repeat=True,
 )
 
-plt.plot(hours, D, linestyle="--", linewidth=2, label="Demand")
-plt.xlabel("Hour of day")
-plt.ylabel("Generation [MWh]")
-plt.title("Hourly generation by technology vs demand")
-plt.legend(loc="upper left", ncols=2)
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.show()
+gif1_name = "model2_profit_capacity_dynamic.gif"
+gif1_path = os.path.abspath(gif1_name)
+anim1.save(gif1_path, writer=PillowWriter(fps=1))
+
+print("\nAnimación 1 guardada en:")
+print(gif1_path)
 
 
+# -------------------------------------------------
+# (4) ANIMACIÓN 2: generación vs demanda por escenario
+# -------------------------------------------------
 
+if len(y_solutions) == 0:
+    print("WARNING: no scenarios stored in y_solutions; skipping generation animation.")
+else:
+    plt.close('all')
 
+    fig_anim2, axg2 = plt.subplots(figsize=(x_length, y_length))
+
+    def init_anim2():
+        axg2.set_xlabel("Hour of day")
+        axg2.set_ylabel("Generation [MWh]")
+        axg2.set_ylim(0, max(D) * 1.3)
+        axg2.set_xlim(hours[0], hours[-1])
+        axg2.grid(True, alpha=0.3)
+        return []
+
+    def update_anim2(frame):
+        axg2.cla()
+
+        y_scen = y_solutions[frame]  # (K, T)
+
+        axg2.stackplot(
+            hours,
+            *[y_scen[k, :] for k in range(K)],
+            labels=tech_names,
+            step="post",
+            colors=tech_colors,
+            alpha=0.6,
+        )
+        axg2.plot(hours, D, linestyle="--", linewidth=2, label="Demand")
+
+        axg2.set_xlabel("Hour of day")
+        axg2.set_ylabel("Generation [MWh]")
+        axg2.set_ylim(0, max(D) * 1.3)
+        axg2.set_xlim(hours[0], hours[-1])
+        axg2.grid(True, alpha=0.3)
+
+        axg2.set_title(
+            f"Hourly generation by technology vs demand\n"
+            f"Scenario {frame} ({overinvestment_pct[frame]:.0f}% over peak)"
+        )
+
+        axg2.legend(loc="upper left", ncols=2, fontsize=8)
+
+        return []
+
+    anim2 = FuncAnimation(
+        fig_anim2,
+        update_anim2,
+        frames=n_scen,
+        init_func=init_anim2,
+        interval=1000,
+        repeat=True,
+    )
+
+    gif2_name = "model2_generation_dynamic.gif"
+    gif2_path = os.path.abspath(gif2_name)
+    anim2.save(gif2_path, writer=PillowWriter(fps=1))
+
+    print("\nAnimación 2 guardada en:")
+    print(gif2_path)
