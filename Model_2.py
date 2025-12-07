@@ -1,4 +1,5 @@
 """
+<<<<<<< HEAD
 Model 2 — Joint Investment and Dispatch with Capacity Cap Sensitivity
 
 This script implements Model 2 from the assignment: a 24-hour investment
@@ -44,6 +45,34 @@ Key parameters to experiment with:
 These parameters allow exploration of how the allowed total capacity,
 technology cost structure and wind availability shape the optimal
 capacity mix, the hourly dispatch pattern, and the resulting profit.
+=======
+Model 2 – Intertemporal Investment and Dispatch Model
+-----------------------------------------------------
+
+This script implements Model 2, where investment decisions (x_k) are made
+together with hourly dispatch (y_{k,i}) over a 24-hour horizon. Prices,
+demand, marginal costs, and wind availability vary by hour, allowing the model
+to capture temporal effects ignored in the myopic Model 1.
+
+WHAT THE SCRIPT DOES:
+• Builds hourly demand, price, marginal cost, and wind capacity-factor profiles.
+• Decides capacity investments x_k subject to per-technology and global limits.
+• Dispatches each technology hourly to meet demand: Σ_k y_{k,i} = D_i.
+• Enforces technology constraints (e.g., wind availability y ≤ x·CF).
+• Maximises total 24h profit minus CAPEX and prints optimal x_k and y_{k,i}.
+• Runs multiple capacity-scaling scenarios to show profit sensitivity.
+• Produces plots for profit, investment mix, and hourly generation.
+
+KEY PARAMETERS TO TUNE:
+• Demand and price curve definitions
+• Wind capacity factor profile CF_wind
+• CAPEX_per_MW and marginal costs c_{k,i}
+• x_ub (per-technology caps) and X_max (global cap)
+
+USAGE:
+Run the script directly to compute optimal investments and dispatch, and to
+generate the scenario and visualisation outputs for analysis.
+>>>>>>> 55d12bef7aad1f531329a34e4b3935d40588137d
 """
 
 
@@ -178,6 +207,12 @@ if __name__ == "__main__":
     evening_peak = 250 * np.exp(-0.5 * ((hours - 19) / 3)**2)
 
     D = base_load + morning_peak + evening_peak
+<<<<<<< HEAD
+=======
+
+    
+    # Scale so that the maximum is 500
+>>>>>>> 55d12bef7aad1f531329a34e4b3935d40588137d
     factor = 500 / D.max()
     D = (D * factor).round(1)
 
@@ -238,7 +273,11 @@ if __name__ == "__main__":
     # Scenario generator: Allow different total capacity caps
 
     for scale in scenario_scales:
+<<<<<<< HEAD
         X_max_scen = scale * D_max   
+=======
+        X_max_scen = scale * D_max   # total cap allowed in this scenario
+>>>>>>> 55d12bef7aad1f531329a34e4b3935d40588137d
 
         print("\n==============================")
         print(f"Scenario: X_max = {X_max_scen:.1f} MW "
@@ -277,6 +316,7 @@ plt.close('all')
 n_scen = len(overinvestment_pct)
 K = len(tech_names)
 
+<<<<<<< HEAD
 # -------------------------------------------------
 # (1) PLOT ESTÁTICO: Profit + capacity mix
 # -------------------------------------------------
@@ -300,6 +340,9 @@ ax1.grid(True, axis="x", alpha=0.3)
 bottom = np.zeros(n_scen)
 bar_width = 4.0
 tech_colors = []
+=======
+tech_colors = [] 
+>>>>>>> 55d12bef7aad1f531329a34e4b3935d40588137d
 
 for k, tech in enumerate(tech_names):
     bars_k = ax2.bar(
@@ -311,6 +354,11 @@ for k, tech in enumerate(tech_names):
         label=tech,
     )
     bottom = bottom + x_solutions[k, :]
+<<<<<<< HEAD
+=======
+
+    # Store color of this technology
+>>>>>>> 55d12bef7aad1f531329a34e4b3935d40588137d
     tech_colors.append(bars_k[0].get_facecolor())
 
 ax2.set_ylabel("Installed capacity [MW]")
@@ -336,6 +384,7 @@ plt.show()
 # (2) PLOT ESTÁTICO: generación vs demanda (último escenario)
 # -------------------------------------------------
 
+<<<<<<< HEAD
 if len(y_solutions) == 0:
     print("WARNING: no scenarios stored in y_solutions; skipping generation plots.")
 else:
@@ -453,6 +502,15 @@ anim1 = FuncAnimation(
     init_func=init_anim1,
     interval=1000,
     repeat=True,
+=======
+plt.stackplot(
+    hours,
+    *[y_opt[k, :] for k in range(len(tech_names))],
+    labels=tech_names,
+    step="post",
+    colors=tech_colors,   
+    alpha=0.4             
+>>>>>>> 55d12bef7aad1f531329a34e4b3935d40588137d
 )
 
 gif1_name = "model2_profit_capacity_dynamic.gif"
