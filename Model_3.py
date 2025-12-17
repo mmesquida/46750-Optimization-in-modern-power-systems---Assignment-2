@@ -31,9 +31,14 @@ technology attractiveness, and the resulting optimal investment mix.
 """
 
 from matplotlib.lines import Line2D
+from matplotlib.animation import FuncAnimation, FFMpegWriter    
 import numpy as np
 import gurobipy as gp
 from gurobipy import GRB
+
+import matplotlib as mpl
+
+mpl.rcParams['animation.ffmpeg_path'] = r"C:\Users\Rasmu\anaconda3\envs\integrated-energy-grids\Library\bin\ffmpeg.exe"
 
 
 gp.setParam("LogToConsole", 0)
@@ -272,6 +277,65 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.show()
 
+
+    # === Animation for CAPEX vs competition curve ===
+    fig_anim = plt.figure(figsize=(x_length, y_length))
+    ax_anim = plt.gca()
+
+    buyers_range = np.arange(1, max_buyers + 1)
+
+    # Match your axis limits
+    ax_anim.set_xlim(1, max_buyers)
+    ax_anim.set_ylim(0, np.max(all_C) * 1.1)
+
+    # Same labels & title
+    ax_anim.set_xlabel("Number of competitors (n buyers)")
+    ax_anim.set_ylabel("CAPEX per MW [€/MW]")
+    ax_anim.set_title("Auction-derived CAPEX as competition increases")
+
+    # Match your grid style
+    ax_anim.grid(True, alpha=0.3)
+
+    # Same integer ticks as static plot
+    ax_anim.set_xticks(np.arange(1, max_buyers + 1, 1))
+
+    # Prepare animated lines
+    lines = []
+    for k, tech in enumerate(tech_names):
+        (ln,) = ax_anim.plot([], [], label=tech)
+        lines.append(ln)
+
+    ax_anim.legend(loc="upper left")
+
+    def init():
+        for ln in lines:
+            ln.set_data([], [])
+        return lines
+
+    def update(frame):
+        # frame = number of buyers to show
+        x = buyers_range[:frame]
+        for k, ln in enumerate(lines):
+            y = all_C[:frame, k]
+            ln.set_data(x, y)
+        return lines
+
+    anim = FuncAnimation(
+        fig_anim,
+        update,
+        frames=max_buyers + 1,   # +1 ensures frame 0 = blank
+        init_func=init,
+        interval=200,             # ms between frames
+        blit=True
+    )
+
+    writer = FFMpegWriter(fps=3, bitrate=2400)
+    anim.save("Competition Animation.mp4", writer=writer)
+    print("Saved MP4 animation.")
+
+    plt.close(fig_anim)
+
+
     # --- Break-even analysis ---
     # 24h margins m_k per MW (same formula as in OptimizationProblemModel3.build)
     m_k = np.zeros(n_tech, dtype=float)
@@ -337,6 +401,103 @@ if __name__ == "__main__":
     plt.legend(handles, labels)
     plt.tight_layout()
     plt.show()
+
+    # --- Animation for break-even analysis ---
+    buyers_range = np.arange(1, max_buyers + 1)
+
+    # Precompute break-even points (n_star) and when they become visible (frame index)
+    break_even_info = []  # list of (n_star, frame_index_to_show) or (None, None)
+    for k in range(n_tech):
+        y = net_margin[:, k]
+        signs = np.sign(y)
+
+        idx_zero = np.where(y == 0.0)[0]
+        if idx_zero.size > 0:
+            i0 = idx_zero[0]
+            n_star = buyers_range[i0]
+            frame_show = i0 + 1  # when that point is included
+            break_even_info.append((n_star, frame_show))
+        else:
+            sign_change_idx = np.where(signs[:-1] * signs[1:] < 0)[0]
+            if sign_change_idx.size > 0:
+                i0 = sign_change_idx[0]
+                x0, x1 = buyers_range[i0], buyers_range[i0 + 1]
+                y0, y1 = y[i0], y[i0 + 1]
+                # linear interpolation for n* where y=0
+                n_star = x0 - y0 * (x1 - x0) / (y1 - y0)
+                frame_show = i0 + 2  # need both points visible
+                break_even_info.append((n_star, frame_show))
+            else:
+                break_even_info.append((None, None))  # no break-even for this tech
+
+    fig_be = plt.figure(figsize=(x_length, y_length))
+    ax_be = plt.gca()
+
+    ax_be.set_xlim(1, max_buyers)
+    ax_be.set_ylim(np.min(net_margin) * 1.1, np.max(net_margin) * 1.1)
+    ax_be.set_xlabel("Number of competitors (n buyers)")
+    ax_be.set_ylabel("Net 24h margin per MW [€/MW]")
+    ax_be.set_title("Break-even competition level for each technology")
+    ax_be.grid(True, alpha=0.3)
+    ax_be.set_xticks(np.arange(1, max_buyers + 1, 1))
+
+    # Horizontal zero line
+    ax_be.axhline(0.0, color="black", linestyle="--", linewidth=1)
+
+    # Prepare lines and scatter markers
+    lines = []
+    break_even_scatters = []
+    for k, tech in enumerate(tech_names):
+        (ln,) = ax_be.plot([], [], label=tech)
+        lines.append(ln)
+        scat = ax_be.scatter([], [], s=30, color="black", zorder=5)
+        break_even_scatters.append(scat)
+
+    # Custom legend entry for break-even point
+    handles, labels = ax_be.get_legend_handles_labels()
+    break_even_handle = Line2D(
+        [], [], linestyle="--", marker="o",
+        color="black", label="Break-even point"
+    )
+    handles.append(break_even_handle)
+    labels.append("Break-even point")
+    ax_be.legend(handles, labels, loc="best")
+
+    def init_be():
+        for ln in lines:
+            ln.set_data([], [])
+        for scat in break_even_scatters:
+            scat.set_offsets(np.empty((0, 2)))
+        return lines + break_even_scatters
+
+    def update_be(frame):
+        # frame = number of buyers to show
+        x = buyers_range[:frame]
+        for k in range(n_tech):
+            y = net_margin[:frame, k]
+            lines[k].set_data(x, y)
+
+            n_star, frame_show = break_even_info[k]
+            if n_star is not None and frame >= frame_show:
+                break_even_scatters[k].set_offsets(np.array([[n_star, 0.0]]))
+            else:
+                break_even_scatters[k].set_offsets(np.empty((0, 2)))
+        return lines + break_even_scatters
+
+    anim_be = FuncAnimation(
+        fig_be,
+        update_be,
+        frames=max_buyers + 1,     # frame 0 = blank, then 1..max_buyers
+        init_func=init_be,
+        interval=200,
+        blit=True,
+    )
+
+    # Save as MP4 (uses the ffmpeg path you already configured)
+    writer_be = FFMpegWriter(fps=3, bitrate=2400)
+    anim_be.save("BreakEven Animation.mp4", writer=writer_be)
+    plt.close(fig_be)
+    print("Saved animation: BreakEven Animation.mp4")
 
 
     # --- Select competition level for optimisation output---
